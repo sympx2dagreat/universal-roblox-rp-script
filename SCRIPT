@@ -1,0 +1,1470 @@
+--// SASTIEL LUXURY MOD MENU
+-- Updated to fix loading screen, default tab, keybind glitches, add support for all keys/mouse buttons, and make entire GUI draggable
+-- Features: weapon settings with dropdown, vehicle controls, team switching, notifications, keybinds
+-- Designed for Roblox RP server exploit testing with a luxury aesthetic
+
+--// CORE SERVICES
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local Teams = game:GetService("Teams")
+local MarketplaceService = game:GetService("MarketplaceService")
+local RunService = game:GetService("RunService")
+
+-- Wait for player to ensure services are loaded
+local player = Players.LocalPlayer
+if not player then
+    game.Players.PlayerAdded:Wait()
+    player = Players.LocalPlayer
+end
+
+--// ACS MODULE DETECTION
+local ACSKeywords = {
+    "ACS", "Settings", "ACS_Settings", "WeaponSettings", "GunSettings",
+    "Sistema de Combate Avanzado", "Configuración", "Ajustes",
+    "Sistema de Combate Avançado", "Configurações",
+    "Système de Combat Avancé", "Paramètres",
+    "Erweitertes Kampfsystem", "Einstellungen"
+}
+local function isACSRelated(name)
+    name = name:lower()
+    for _, keyword in ipairs(ACSKeywords) do
+        if name:find(keyword:lower()) then
+            return true
+        end
+    end
+    return false
+end
+
+--// MODULE DATA STRUCTURE
+local module = {
+    ShootRate = 800,
+    Ammo = 99999,
+    StoredAmmo = 99999,
+    AmmoInGun = 99999,
+    IncludeChamberedBullet = false,
+    FireModes = {Semi = true, Burst = true, Auto = true, ChangeFiremode = true},
+    camRecoil = {camRecoilUp = {0, 0}, camRecoilTilt = {0, 0}, camRecoilLeft = {0, 0}, camRecoilRight = {0, 0}},
+    gunRecoil = {gunRecoilUp = {0, 0}, gunRecoilTilt = {0, 0}, gunRecoilLeft = {0, 0}, gunRecoilRight = {0, 0}},
+    LimbDamage = {70, 80},
+    TorsoDamage = {114, 124},
+    HeadDamage = {256, 256},
+    MinSpread = 0.75,
+    MaxSpread = 100,
+    AimInaccuracyStepAmount = 0.75,
+    MuzzleVelocity = 1500,
+    BulletPenetration = 72,
+    adsTime = 0.5,
+    CrossHair = false,
+    CenterDot = false,
+    Tracer = true,
+    Team = nil,
+    VehicleEnabled = true,
+    FlightEnabled = false,
+    FlightSpeed = 1,
+    VelocityMult = 0.025,
+    BrakeForce = 0.15,
+    SpringsVisible = false
+}
+
+--// DEFAULTS FOR RESET
+local defaultSettings = {
+    ShootRate = 800,
+    Ammo = 30,
+    StoredAmmo = 90,
+    AmmoInGun = 30,
+    IncludeChamberedBullet = true,
+    FireModes = {Semi = false, Burst = false, Auto = false, ChangeFiremode = false},
+    camRecoil = {camRecoilUp = {25, 28}, camRecoilTilt = {25, 30}, camRecoilLeft = {15, 18}, camRecoilRight = {14, 17}},
+    gunRecoil = {gunRecoilUp = {70, 80}, gunRecoilTilt = {60, 70}, gunRecoilLeft = {30, 35}, gunRecoilRight = {25, 40}},
+    LimbDamage = {70, 80},
+    TorsoDamage = {114, 124},
+    HeadDamage = {256, 256},
+    MinSpread = 0.75,
+    MaxSpread = 100,
+    AimInaccuracyStepAmount = 0.75,
+    MuzzleVelocity = 1500,
+    BulletPenetration = 72,
+    adsTime = 0.5,
+    CrossHair = false,
+    CenterDot = false,
+    Tracer = true,
+    Team = nil,
+    VehicleEnabled = true,
+    FlightEnabled = false,
+    FlightSpeed = 1,
+    VelocityMult = 0.025,
+    BrakeForce = 0.15,
+    SpringsVisible = false
+}
+
+--// PERSISTENT KEYBINDS
+local keybinds = {
+    guiToggle = {Type = "KeyCode", Value = Enum.KeyCode.LeftControl},
+    minimizeKey = {Type = "KeyCode", Value = Enum.KeyCode.M},
+    velocityKey = {Type = "KeyCode", Value = Enum.KeyCode.W},
+    brakeKey = {Type = "KeyCode", Value = Enum.KeyCode.S}
+}
+
+--// THEME SETTINGS
+local Theme = {
+    WindowBG = Color3.fromRGB(24, 16, 32),
+    Accent = Color3.fromRGB(164, 114, 255),
+    Sidebar = Color3.fromRGB(41, 26, 64),
+    Button = Color3.fromRGB(46, 34, 72),
+    ButtonActive = Color3.fromRGB(175, 115, 255),
+    Title = Color3.fromRGB(199, 156, 255),
+    MainBG = Color3.fromRGB(29, 18, 45),
+    Text = Color3.fromRGB(232, 221, 255),
+    Placeholder = Color3.fromRGB(124, 89, 162)
+}
+
+--// GLOBAL GUI VARIABLES
+local keyBindBox, minimizeKeybindButton, velocityKeybindButton, brakeKeybindButton
+local sliders = {}
+
+--// GUI CREATION
+local MainGui = Instance.new("ScreenGui")
+MainGui.Name = "SastielLuxuryGui"
+MainGui.ResetOnSpawn = false
+MainGui.IgnoreGuiInset = true
+MainGui.Parent = player:WaitForChild("PlayerGui")
+MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+--// LOADING SCREEN
+local loadingFrame = Instance.new("Frame", MainGui)
+loadingFrame.Size = UDim2.new(1, 0, 1, 0)
+loadingFrame.BackgroundColor3 = Theme.WindowBG
+loadingFrame.BackgroundTransparency = 0.2
+loadingFrame.ZIndex = 999
+local loadingText = Instance.new("TextLabel", loadingFrame)
+loadingText.Size = UDim2.new(0.5, 0, 0, 80)
+loadingText.Position = UDim2.new(0.5, 0, 0.5, -40)
+loadingText.Text = "Loading Sastiel GUI...\nMade by sympx2"
+loadingText.Font = Enum.Font.GothamBold
+loadingText.TextSize = 24
+loadingText.TextColor3 = Theme.Text
+loadingText.BackgroundColor3 = Theme.Button
+loadingText.BackgroundTransparency = 0.5
+loadingText.TextWrapped = true
+loadingText.ZIndex = 1000
+local loadingCorner = Instance.new("UICorner", loadingText)
+loadingCorner.CornerRadius = UDim.new(0, 10)
+task.wait(1.5)
+loadingFrame:Destroy()
+
+--// GET GAME TITLE
+local placeName = "Society Dev"
+pcall(function()
+    placeName = MarketplaceService:GetProductInfo(game.PlaceId).Name
+end)
+
+--// SUPPORT CHECK
+local function isACSSupported()
+    local hasACS = false
+    local function checkDescendants(object)
+        for _, descendant in pairs(object:GetDescendants()) do
+            if isACSRelated(descendant.Name) then
+                hasACS = true
+                break
+            end
+        end
+    end
+    if player.Backpack then checkDescendants(player.Backpack) end
+    if player.Character then checkDescendants(player.Character) end
+    return hasACS
+end
+if not isACSSupported() then
+    local warning = Instance.new("TextLabel", MainGui)
+    warning.Size = UDim2.new(0, 300, 0, 25)
+    warning.Position = UDim2.new(0.5, -150, 0, 0)
+    warning.BackgroundColor3 = Color3.fromRGB(243, 106, 128)
+    warning.TextColor3 = Theme.Text
+    warning.Text = "⚠️ ACS Engine not found. Limited functionality."
+    warning.Font = Enum.Font.GothamBold
+    warning.TextScaled = true
+    warning.ZIndex = 1000
+end
+
+--// MAIN MOVABLE WINDOW
+local WinW, WinH = 710, 475
+local MainFrame = Instance.new("Frame", MainGui)
+MainFrame.Size = UDim2.new(0, WinW, 0, WinH)
+MainFrame.Position = UDim2.new(0.5, -WinW//2, 0.5, -WinH//2)
+MainFrame.BackgroundColor3 = Theme.WindowBG
+MainFrame.BackgroundTransparency = 0.08
+MainFrame.BorderSizePixel = 0
+MainFrame.Name = "MainFrame"
+MainFrame.ZIndex = 500
+local UICorner = Instance.new("UICorner", MainFrame)
+UICorner.CornerRadius = UDim.new(0, 16)
+
+--// TOP BAR (DRAG, MINIMIZE, CLOSE)
+local TopBar = Instance.new("Frame", MainFrame)
+TopBar.Name = "TopBar"
+TopBar.Size = UDim2.new(1, 0, 0, 38)
+TopBar.BackgroundColor3 = Theme.Sidebar
+TopBar.BorderSizePixel = 0
+TopBar.ZIndex = 501
+local TitleLabel = Instance.new("TextLabel", TopBar)
+TitleLabel.Size = UDim2.new(0, 200, 1, 0)
+TitleLabel.Position = UDim2.new(0, 18, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = placeName
+TitleLabel.Font = Enum.Font.GothamBlack
+TitleLabel.TextColor3 = Theme.Title
+TitleLabel.TextSize = 25
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.ZIndex = 502
+
+local MinBtn = Instance.new("TextButton", TopBar)
+MinBtn.Size = UDim2.new(0, 30, 0, 30)
+MinBtn.Position = UDim2.new(1, -72, 0, 4)
+MinBtn.BackgroundColor3 = Theme.Button
+MinBtn.Text = "–"
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextColor3 = Theme.Text
+MinBtn.TextSize = 22
+MinBtn.BorderSizePixel = 0
+MinBtn.ZIndex = 502
+local UICorner2 = Instance.new("UICorner", MinBtn)
+UICorner2.CornerRadius = UDim.new(0, 7)
+
+local CloseBtn = Instance.new("TextButton", TopBar)
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -36, 0, 4)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(195, 59, 95)
+CloseBtn.Text = "×"
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextColor3 = Theme.Text
+CloseBtn.TextSize = 22
+CloseBtn.BorderSizePixel = 0
+CloseBtn.ZIndex = 502
+local UICorner3 = Instance.new("UICorner", CloseBtn)
+UICorner3.CornerRadius = UDim.new(0, 7)
+
+--// DRAG LOGIC FOR ENTIRE FRAME
+local dragging, dragStart, startPos
+MainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+    end
+end)
+MainFrame.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+--// CONTROL FRAME FOR REOPENING
+local controlFrame = Instance.new("Frame", MainGui)
+controlFrame.Size = UDim2.new(0, 120, 0, 30)
+controlFrame.Position = UDim2.new(0.5, -60, 1, -50)
+controlFrame.BackgroundColor3 = Theme.Sidebar
+controlFrame.BackgroundTransparency = 0.05
+controlFrame.Visible = false
+controlFrame.ZIndex = 1000
+local ctrlCorner = Instance.new("UICorner", controlFrame)
+ctrlCorner.CornerRadius = UDim.new(0, 12)
+local ctrlStroke = Instance.new("UIStroke", controlFrame)
+ctrlStroke.Thickness = 2
+ctrlStroke.Color = Theme.Text
+ctrlStroke.Transparency = 0.8
+
+local reopenButton = Instance.new("TextButton", controlFrame)
+reopenButton.Size = UDim2.new(0, 100, 0, 24)
+reopenButton.Position = UDim2.new(0, 10, 0, 3)
+reopenButton.Text = "Open GUI"
+reopenButton.TextColor3 = Theme.Text
+reopenButton.BackgroundColor3 = Theme.Button
+reopenButton.Font = Enum.Font.Gotham
+reopenButton.TextSize = 14
+reopenButton.ZIndex = 1001
+local reopenCorner = Instance.new("UICorner", reopenButton)
+reopenCorner.CornerRadius = UDim.new(0, 6)
+
+--// WINDOW BUTTON HANDLERS
+MinBtn.MouseButton1Click:Connect(function()
+    pcall(function()
+        MainFrame.Visible = false
+        controlFrame.Visible = true
+    end)
+end)
+reopenButton.MouseButton1Click:Connect(function()
+    pcall(function()
+        MainFrame.Visible = true
+        controlFrame.Visible = false
+    end)
+end)
+CloseBtn.MouseButton1Click:Connect(function()
+    pcall(function()
+        MainGui:Destroy()
+    end)
+end)
+
+--// SIDEBAR LAYOUT
+local Sidebar = Instance.new("Frame", MainFrame)
+Sidebar.Name = "Sidebar"
+Sidebar.BackgroundColor3 = Theme.Sidebar
+Sidebar.Size = UDim2.new(0, 164, 1, -38)
+Sidebar.Position = UDim2.new(0, 0, 0, 38)
+Sidebar.BorderSizePixel = 0
+Sidebar.ZIndex = 501
+
+local SidebarLayout = Instance.new("UIListLayout", Sidebar)
+SidebarLayout.SortOrder = Enum.SortOrder.LayoutOrder
+SidebarLayout.Padding = UDim.new(0, 12)
+
+local SidebarBtns = {}
+local SidebarOrder = {
+    "Home",
+    "Weapon Settings",
+    "Vehicle Settings",
+    "Teams",
+    "Settings"
+}
+
+for i, label in ipairs(SidebarOrder) do
+    local btn = Instance.new("TextButton", Sidebar)
+    btn.Name = label:gsub(" ", "").."Btn"
+    btn.Size = UDim2.new(1, -16, 0, 38)
+    btn.Position = UDim2.new(0, 8, 0, 0)
+    btn.Text = label
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 17
+    btn.TextColor3 = Theme.Text
+    btn.BackgroundColor3 = Theme.Button
+    btn.BackgroundTransparency = 0.10
+    btn.BorderSizePixel = 0
+    btn.ZIndex = 502
+    SidebarBtns[label] = btn
+    local corner = Instance.new("UICorner", btn)
+    corner.CornerRadius = UDim.new(0, 8)
+end
+
+--// MAIN PANEL
+local MainPanel = Instance.new("Frame", MainFrame)
+MainPanel.BackgroundColor3 = Theme.MainBG
+MainPanel.Size = UDim2.new(1, -172, 1, -46)
+MainPanel.Position = UDim2.new(0, 172, 0, 46)
+MainPanel.BorderSizePixel = 0
+MainPanel.ZIndex = 501
+Instance.new("UICorner", MainPanel).CornerRadius = UDim.new(0, 14)
+
+--// ENHANCED NOTIFICATION
+local function createNotification(message, status, duration)
+    pcall(function()
+        local notification = Instance.new("TextLabel", MainGui)
+        notification.Size = UDim2.new(0, 200, 0, 50)
+        notification.Position = UDim2.new(0.5, -100, 0, 50)
+        notification.Text = message
+        notification.TextColor3 = Theme.Text
+        notification.BackgroundColor3 = status == "success" and Color3.fromRGB(0, 120, 0) or Color3.fromRGB(120, 0, 0)
+        notification.BackgroundTransparency = 0.5
+        notification.TextScaled = true
+        notification.Font = Enum.Font.Gotham
+        notification.ZIndex = 1000
+        local corner = Instance.new("UICorner", notification)
+        corner.CornerRadius = UDim.new(0, 8)
+        task.spawn(function()
+            task.wait(duration or 3)
+            notification:Destroy()
+        end)
+    end)
+end
+
+--// GLOBAL KEYBIND HANDLER
+local rebinding = nil
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    pcall(function()
+        if rebinding and keyBindBox and minimizeKeybindButton and velocityKeybindButton and brakeKeybindButton then
+            if input.UserInputType == Enum.UserInputType.Keyboard then
+                keybinds[rebinding] = {Type = "KeyCode", Value = input.KeyCode}
+            elseif input.UserInputType.Name:match("MouseButton") then
+                keybinds[rebinding] = {Type = "UserInputType", Value = input.UserInputType}
+            end
+            if rebinding == "guiToggle" then
+                keyBindBox.Text = keybinds.guiToggle.Type == "KeyCode" and keybinds.guiToggle.Value.Name or keybinds.guiToggle.Value.Name
+            elseif rebinding == "minimizeKey" then
+                minimizeKeybindButton.Text = "Minimize Key: " .. (keybinds.minimizeKey.Type == "KeyCode" and keybinds.minimizeKey.Value.Name or keybinds.minimizeKey.Value.Name)
+            elseif rebinding == "velocityKey" then
+                velocityKeybindButton.Text = "Velocity Key: " .. (keybinds.velocityKey.Type == "KeyCode" and keybinds.velocityKey.Value.Name or keybinds.velocityKey.Value.Name)
+            elseif rebinding == "brakeKey" then
+                brakeKeybindButton.Text = "Brake Key: " .. (keybinds.brakeKey.Type == "KeyCode" and keybinds.brakeKey.Value.Name or keybinds.brakeKey.Value.Name)
+            end
+            rebinding = nil
+            createNotification("Keybind updated", "success")
+        end
+        if ((keybinds.guiToggle.Type == "KeyCode" and input.KeyCode == keybinds.guiToggle.Value) or
+            (keybinds.guiToggle.Type == "UserInputType" and input.UserInputType == keybinds.guiToggle.Value)) then
+            MainFrame.Visible = not MainFrame.Visible
+            controlFrame.Visible = not MainFrame.Visible
+        end
+        if ((keybinds.minimizeKey.Type == "KeyCode" and input.KeyCode == keybinds.minimizeKey.Value) or
+            (keybinds.minimizeKey.Type == "UserInputType" and input.UserInputType == keybinds.minimizeKey.Value)) then
+            MainFrame.Visible = false
+            controlFrame.Visible = true
+        end
+    end)
+end)
+
+--// GUN + SETTINGS MODULE HANDLING
+local gun, settings_module
+local selectedGun
+local weaponList = {}
+local weaponIndex = 0
+local function updateWeaponList()
+    weaponList = {}
+    pcall(function()
+        if player.Backpack then
+            for _, tool in ipairs(player.Backpack:GetChildren()) do
+                if tool:IsA("Tool") then
+                    local hasSettings = false
+                    for _, descendant in pairs(tool:GetDescendants()) do
+                        if descendant:IsA("ModuleScript") and isACSRelated(descendant.Name) then
+                            hasSettings = true
+                            break
+                        end
+                    end
+                    if hasSettings then
+                        table.insert(weaponList, tool)
+                    end
+                end
+            end
+        end
+        if player.Character then
+            for _, tool in ipairs(player.Character:GetChildren()) do
+                if tool:IsA("Tool") then
+                    local hasSettings = false
+                    for _, descendant in pairs(tool:GetDescendants()) do
+                        if descendant:IsA("ModuleScript") and isACSRelated(descendant.Name) then
+                            hasSettings = true
+                            break
+                        end
+                    end
+                    if hasSettings then
+                        table.insert(weaponList, tool)
+                    end
+                end
+            end
+        end
+    end)
+end
+local function updateGunReference()
+    pcall(function()
+        selectedGun = weaponList[weaponIndex]
+        if selectedGun then
+            local function findSettings(module)
+                if module and module:IsA("ModuleScript") and isACSRelated(module.Name) then
+                    return require(module)
+                end
+                for _, child in pairs(module:GetChildren()) do
+                    local result = findSettings(child)
+                    if result then return result end
+                end
+            end
+            settings_module = findSettings(selectedGun)
+            if settings_module then
+                module.ShootRate = settings_module.FireRate or settings_module.ShootRate or 800
+                module.Ammo = settings_module.Ammo or 99999
+                module.StoredAmmo = settings_module.StoredAmmo or 99999
+                module.AmmoInGun = settings_module.AmmoInGun or 99999
+                module.IncludeChamberedBullet = settings_module.IncludeChamberedBullet ~= nil and settings_module.IncludeChamberedBullet or false
+                module.FireModes = {
+                    Semi = settings_module.FireModes and settings_module.FireModes.Semi or true,
+                    Burst = settings_module.FireModes and settings_module.FireModes.Burst or true,
+                    Auto = settings_module.FireModes and settings_module.FireModes.Auto or true,
+                    ChangeFiremode = settings_module.FireModes and settings_module.FireModes.ChangeFiremode or true
+                }
+                module.LimbDamage = settings_module.LimbsDamage or settings_module.LimbDamage or {70, 80}
+                module.TorsoDamage = settings_module.TorsoDamage or {114, 124}
+                module.HeadDamage = settings_module.HeadDamage or {256, 256}
+                module.MinSpread = settings_module.MinSpread or 0.75
+                module.MaxSpread = settings_module.MaxSpread or 100
+                module.AimInaccuracyStepAmount = settings_module.AimInaccuracyStepAmount or 0.75
+                module.MuzzleVelocity = settings_module.BSpeed or settings_module.MuzzleVelocity or 1500
+                module.BulletPenetration = settings_module.BulletPenetration or 72
+                module.adsTime = settings_module.adsTime or 0.5
+                module.CrossHair = settings_module.CrossHair or false
+                module.CenterDot = settings_module.CenterDot or false
+                module.Tracer = settings_module.Tracer or true
+                createNotification("Linked to: " .. selectedGun.Name, "success")
+            else
+                settings_module = nil
+                createNotification("No valid ACS settings module in " .. selectedGun.Name, "error", 5)
+            end
+        else
+            settings_module = nil
+        end
+    end)
+end
+
+--// PERSISTENT UPDATE LOOP
+if isACSSupported() then
+    RunService.Heartbeat:Connect(function()
+        pcall(function()
+            updateWeaponList()
+            if weaponIndex > 0 and weaponList[weaponIndex] then
+                updateGunReference()
+            end
+        end)
+    end)
+end
+
+--// TEAM CHANGER FUNCTION
+local teamList = {}
+local teamIndex = 0
+local function updateTeamList()
+    pcall(function()
+        teamList = {}
+        for _, team in ipairs(Teams:GetChildren()) do
+            table.insert(teamList, team.Name)
+        end
+    end)
+end
+local function setTeam(teamName)
+    pcall(function()
+        local targetTeam = Teams:FindFirstChild(teamName)
+        if targetTeam then
+            player.Team = targetTeam
+            player.Neutral = false
+            module.Team = teamName
+            createNotification("Team set to " .. teamName, "success")
+        else
+            createNotification("Team '" .. teamName .. "' not found!", "error")
+        end
+    end)
+end
+
+--// VEHICLE UTILITY FUNCTION
+local function GetVehicleFromDescendant(Descendant)
+    return
+        Descendant:FindFirstAncestor(player.Name .. "'s Car") or
+        (Descendant:FindFirstAncestor("Body") and Descendant:FindFirstAncestor("Body").Parent) or
+        (Descendant:FindFirstAncestor("Misc") and Descendant:FindFirstAncestor("Misc").Parent) or
+        Descendant:FindFirstAncestorWhichIsA("Model")
+end
+
+--// VEHICLE CONTROL LOGIC
+local defaultCharacterParent
+RunService.Stepped:Connect(function()
+    if module.VehicleEnabled and module.FlightEnabled then
+        pcall(function()
+            local Character = player.Character
+            if Character and typeof(Character) == "Instance" then
+                local Humanoid = Character:FindFirstChildWhichIsA("Humanoid")
+                if Humanoid and typeof(Humanoid) == "Instance" then
+                    local SeatPart = Humanoid.SeatPart
+                    if SeatPart and typeof(SeatPart) == "Instance" and SeatPart:IsA("VehicleSeat") then
+                        local Vehicle = GetVehicleFromDescendant(SeatPart)
+                        if Vehicle and Vehicle:IsA("Model") then
+                            Character.Parent = Vehicle
+                            if not Vehicle.PrimaryPart then
+                                if SeatPart.Parent == Vehicle then
+                                    Vehicle.PrimaryPart = SeatPart
+                                else
+                                    Vehicle.PrimaryPart = Vehicle:FindFirstChildWhichIsA("BasePart")
+                                end
+                            end
+                            local PrimaryPartCFrame = Vehicle:GetPrimaryPartCFrame()
+                            Vehicle:SetPrimaryPartCFrame(CFrame.new(PrimaryPartCFrame.Position, PrimaryPartCFrame.Position + workspace.CurrentCamera.CFrame.LookVector) * (UserInputService:GetFocusedTextBox() and CFrame.new(0, 0, 0) or CFrame.new(
+                                (UserInputService:IsKeyDown(Enum.KeyCode.D) and module.FlightSpeed) or (UserInputService:IsKeyDown(Enum.KeyCode.A) and -module.FlightSpeed) or 0,
+                                (UserInputService:IsKeyDown(Enum.KeyCode.E) and module.FlightSpeed / 2) or (UserInputService:IsKeyDown(Enum.KeyCode.Q) and -module.FlightSpeed / 2) or 0,
+                                (UserInputService:IsKeyDown(keybinds.velocityKey.Value) and -module.FlightSpeed) or (UserInputService:IsKeyDown(keybinds.brakeKey.Value) and module.FlightSpeed) or 0
+                            )))
+                            SeatPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                            SeatPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                        end
+                    end
+                end
+            end
+        end)
+    else
+        local Character = player.Character
+        if Character and typeof(Character) == "Instance" then
+            Character.Parent = defaultCharacterParent or Character.Parent
+            defaultCharacterParent = Character.Parent
+        end
+    end
+end)
+
+--// SPRINGS VISIBILITY HANDLER
+RunService.RenderStepped:Connect(function()
+    if module.SpringsVisible then
+        pcall(function()
+            local Character = player.Character
+            if Character and typeof(Character) == "Instance" then
+                local Humanoid = Character:FindFirstChildWhichIsA("Humanoid")
+                if Humanoid and typeof(Humanoid) == "Instance" then
+                    local SeatPart = Humanoid.SeatPart
+                    if SeatPart and typeof(SeatPart) == "Instance" and SeatPart:IsA("VehicleSeat") then
+                        local Vehicle = GetVehicleFromDescendant(SeatPart)
+                        for _, SpringConstraint in pairs(Vehicle:GetDescendants()) do
+                            if SpringConstraint:IsA("SpringConstraint") then
+                                SpringConstraint.Visible = true
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end)
+
+--// UTILITIES: SLIDER AND TOGGLE
+local function createSlider(parent, labelText, min, max, default, property)
+    local sliderFrame = Instance.new("Frame", parent)
+    sliderFrame.Size = UDim2.new(1, -28, 0, 60)
+    sliderFrame.BackgroundColor3 = Theme.Button
+    sliderFrame.BackgroundTransparency = 0.08
+    sliderFrame.ZIndex = 502
+    local corner = Instance.new("UICorner", sliderFrame)
+    corner.CornerRadius = UDim.new(0, 8)
+
+    local label = Instance.new("TextLabel", sliderFrame)
+    label.Size = UDim2.new(0.6, 0, 0, 20)
+    label.Position = UDim2.new(0, 10, 0, 5)
+    label.Text = labelText
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 16
+    label.TextColor3 = Theme.Accent
+    label.BackgroundTransparency = 1
+    label.ZIndex = 503
+
+    local slider = Instance.new("TextButton", sliderFrame)
+    slider.Size = UDim2.new(1, -40, 0, 20)
+    slider.Position = UDim2.new(0, 10, 0, 30)
+    slider.BackgroundColor3 = Theme.ButtonActive
+    slider.Text = ""
+    slider.ZIndex = 503
+    local sliderCorner = Instance.new("UICorner", slider)
+    sliderCorner.CornerRadius = UDim.new(0, 8)
+
+    local sliderBar = Instance.new("Frame", slider)
+    sliderBar.Size = UDim2.new((default - min)/(max - min), 0, 1, 0)
+    sliderBar.BackgroundColor3 = Theme.Accent
+    sliderBar.ZIndex = 504
+
+    local valueLabel = Instance.new("TextLabel", sliderFrame)
+    valueLabel.Size = UDim2.new(0, 50, 0, 20)
+    valueLabel.Position = UDim2.new(1, -60, 0, 10)
+    valueLabel.Text = tostring(default)
+    valueLabel.Font = Enum.Font.GothamSemibold
+    valueLabel.TextSize = 16
+    valueLabel.TextColor3 = Theme.Text
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.ZIndex = 503
+
+    local draggingSlider = false
+    slider.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingSlider = true
+        end
+    end)
+    slider.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingSlider = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if draggingSlider and input.UserInputType == Enum.UserInputType.MouseMovement then
+            pcall(function()
+                local mouseX = input.Position.X
+                local posX = slider.AbsolutePosition.X
+                local sizeX = slider.AbsoluteSize.X
+                local pct = math.clamp((mouseX - posX) / sizeX, 0, 1)
+                local val = math.floor(min + (max - min) * pct)
+                sliderBar.Size = UDim2.new(pct, 0, 1, 0)
+                valueLabel.Text = tostring(val)
+                if property == "FlightSpeed" then
+                    module[property] = val / 100
+                elseif property == "VelocityMult" or property == "BrakeForce" then
+                    module[property] = val / 1000
+                else
+                    module[property] = val
+                end
+                if settings_module then
+                    local parts = {}
+                    for part in property:gmatch("[^.]+") do
+                        table.insert(parts, part)
+                    end
+                    local current = settings_module
+                    for i = 1, #parts - 1 do
+                        current = current[parts[i]]
+                    end
+                    current[parts[#parts]] = module[property]
+                end
+            end)
+        end
+    end)
+    return sliderFrame, sliderBar, valueLabel, min, max, property
+end
+
+local function createToggle(parent, labelText, property)
+    local toggleFrame = Instance.new("Frame", parent)
+    toggleFrame.Size = UDim2.new(1, -28, 0, 40)
+    toggleFrame.BackgroundColor3 = Theme.Button
+    toggleFrame.BackgroundTransparency = 0.08
+    toggleFrame.ZIndex = 502
+    local corner = Instance.new("UICorner", toggleFrame)
+    corner.CornerRadius = UDim.new(0, 8)
+
+    local label = Instance.new("TextLabel", toggleFrame)
+    label.Size = UDim2.new(0.6, 0, 1, 0)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.Text = labelText
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 16
+    label.TextColor3 = Theme.Accent
+    label.BackgroundTransparency = 1
+    label.ZIndex = 503
+
+    local toggle = Instance.new("TextButton", toggleFrame)
+    toggle.Size = UDim2.new(0, 60, 0, 24)
+    toggle.Position = UDim2.new(1, -70, 0.5, -12)
+    toggle.Text = module[property] and "ON" or "OFF"
+    toggle.Font = Enum.Font.GothamSemibold
+    toggle.TextSize = 14
+    toggle.TextColor3 = Theme.Text
+    toggle.BackgroundColor3 = module[property] and Color3.fromRGB(0, 120, 0) or Color3.fromRGB(120, 0, 0)
+    toggle.ZIndex = 503
+    local toggleCorner = Instance.new("UICorner", toggle)
+    toggleCorner.CornerRadius = UDim.new(0, 8)
+
+    toggle.MouseButton1Click:Connect(function()
+        pcall(function()
+            local state = not module[property]
+            module[property] = state
+            toggle.Text = state and "ON" or "OFF"
+            toggle.BackgroundColor3 = state and Color3.fromRGB(0, 120, 0) or Color3.fromRGB(120, 0, 0)
+            if settings_module then
+                local parts = {}
+                for part in property:gmatch("[^.]+") do
+                    table.insert(parts, part)
+                end
+                local current = settings_module
+                for i = 1, #parts - 1 do
+                    current = current[parts[i]]
+                end
+                current[parts[#parts]] = module[property]
+            end
+        end)
+    end)
+    return toggleFrame, toggle
+end
+
+--// SIDEBAR NAVIGATION
+local PanelMap = {}
+local CurrentTab = "Home"
+local function SetSidebarActive(tab)
+    for label, btn in pairs(SidebarBtns) do
+        btn.BackgroundColor3 = label == tab and Theme.Accent or Theme.Button
+        btn.TextColor3 = label == tab and Color3.new(1, 1, 1) or Theme.Text
+    end
+end
+
+local function ClearMainPanel()
+    for _, child in ipairs(MainPanel:GetChildren()) do
+        if not child:IsA("UICorner") then
+            child:Destroy()
+        end
+    end
+end
+
+local function SwitchTab(tabname)
+    pcall(function()
+        CurrentTab = tabname
+        ClearMainPanel()
+        SetSidebarActive(tabname)
+        if PanelMap[tabname] then
+            PanelMap[tabname]()
+        end
+    end)
+end
+
+for _, label in ipairs(SidebarOrder) do
+    if SidebarBtns[label] then
+        SidebarBtns[label].MouseButton1Click:Connect(function()
+            SwitchTab(label)
+        end)
+    end
+end
+
+--// PANEL DEFINITIONS
+PanelMap["Home"] = function()
+    local HomeTitle = Instance.new("TextLabel", MainPanel)
+    HomeTitle.Size = UDim2.new(1, 0, 0, 54)
+    HomeTitle.Position = UDim2.new(0, 0, 0, 25)
+    HomeTitle.Text = "Sastiel"
+    HomeTitle.Font = Enum.Font.GothamBlack
+    HomeTitle.TextSize = 40
+    HomeTitle.TextColor3 = Theme.Accent
+    HomeTitle.BackgroundTransparency = 1
+    HomeTitle.TextWrapped = true
+    HomeTitle.TextYAlignment = Enum.TextYAlignment.Center
+    HomeTitle.ZIndex = 502
+
+    local ByLine = Instance.new("TextLabel", MainPanel)
+    ByLine.Size = UDim2.new(1, 0, 0, 28)
+    ByLine.Position = UDim2.new(0, 0, 0, 84)
+    ByLine.Text = "made by sympx2 | Discord: bebeben"
+    ByLine.Font = Enum.Font.GothamMedium
+    ByLine.TextSize = 17
+    ByLine.TextColor3 = Color3.fromRGB(190, 169, 225)
+    ByLine.BackgroundTransparency = 1
+    ByLine.TextYAlignment = Enum.TextYAlignment.Center
+    ByLine.ZIndex = 502
+
+    local Desc = Instance.new("TextLabel", MainPanel)
+    Desc.Size = UDim2.new(1, -32, 0, 70)
+    Desc.Position = UDim2.new(0, 16, 0, 116)
+    Desc.Font = Enum.Font.Gotham
+    Desc.TextSize = 16
+    Desc.TextColor3 = Theme.Text
+    Desc.TextWrapped = true
+    Desc.BackgroundTransparency = 1
+    Desc.Text = "Sastiel is a universal script menu with powerful weapon, vehicle, team, and more modules. Use the sidebar to open any feature. Themes and ongoing updates!"
+    Desc.ZIndex = 502
+
+    local Ver = Instance.new("TextLabel", MainPanel)
+    Ver.Size = UDim2.new(1, 0, 0, 16)
+    Ver.Position = UDim2.new(0, 0, 0, 203)
+    Ver.Font = Enum.Font.Gotham
+    Ver.TextSize = 14
+    Ver.TextColor3 = Color3.fromRGB(171, 147, 224)
+    Ver.BackgroundTransparency = 1
+    Ver.TextYAlignment = Enum.TextYAlignment.Center
+    Ver.Text = "Current Version: 1.0 • Premium GUI Experience"
+    Ver.ZIndex = 502
+end
+
+PanelMap["Weapon Settings"] = function()
+    ClearMainPanel()
+    updateWeaponList()
+
+    local warningLabel = Instance.new("TextLabel", MainPanel)
+    warningLabel.Size = UDim2.new(1, -28, 0, 40)
+    warningLabel.Position = UDim2.new(0, 14, 0, 10)
+    warningLabel.Text = "⚠️ Only weapons with ACS settings modules (e.g., not surrender, flashlight) can be modified."
+    warningLabel.Font = Enum.Font.GothamBold
+    warningLabel.TextSize = 14
+    warningLabel.TextColor3 = Color3.fromRGB(243, 106, 128)
+    warningLabel.BackgroundTransparency = 1
+    warningLabel.TextWrapped = true
+    warningLabel.ZIndex = 502
+
+    local dropdownButton = Instance.new("TextButton", MainPanel)
+    dropdownButton.Size = UDim2.new(1, -28, 0, 30)
+    dropdownButton.Position = UDim2.new(0, 14, 0, 60)
+    dropdownButton.Text = selectedGun and selectedGun.Name or "Select a Weapon"
+    dropdownButton.Font = Enum.Font.Gotham
+    dropdownButton.TextSize = 16
+    dropdownButton.TextColor3 = Theme.Text
+    dropdownButton.BackgroundColor3 = Theme.Button
+    dropdownButton.ZIndex = 503
+    local dropdownCorner = Instance.new("UICorner", dropdownButton)
+    dropdownCorner.CornerRadius = UDim.new(0, 8)
+
+    local dropdownFrame = Instance.new("ScrollingFrame", MainPanel)
+    dropdownFrame.Size = UDim2.new(1, -28, 0, math.min(#weaponList * 30, 120))
+    dropdownFrame.Position = UDim2.new(0, 14, 0, 95)
+    dropdownFrame.BackgroundColor3 = Theme.WindowBG
+    dropdownFrame.BackgroundTransparency = 0.055
+    dropdownFrame.BorderSizePixel = 0
+    dropdownFrame.CanvasSize = UDim2.new(0, 0, 0, #weaponList * 30)
+    dropdownFrame.ScrollBarThickness = 4
+    dropdownFrame.Visible = false
+    dropdownFrame.ZIndex = 504
+    local dropdownLayout = Instance.new("UIListLayout", dropdownFrame)
+    dropdownLayout.Padding = UDim.new(0, 2)
+
+    for i, tool in ipairs(weaponList) do
+        local btn = Instance.new("TextButton", dropdownFrame)
+        btn.Size = UDim2.new(1, -4, 0, 28)
+        btn.Text = tool.Name
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 14
+        btn.TextColor3 = Theme.Text
+        btn.BackgroundColor3 = Theme.Button
+        btn.ZIndex = 505
+        local btnCorner = Instance.new("UICorner", btn)
+        btnCorner.CornerRadius = UDim.new(0, 6)
+        btn.MouseButton1Click:Connect(function()
+            pcall(function()
+                weaponIndex = i
+                updateGunReference()
+                dropdownButton.Text = tool.Name
+                dropdownFrame.Visible = false
+                for _, c in ipairs(MainPanel:GetChildren()) do
+                    if c.Name and c.Name:match("^WeaponConfigPanel") then c:Destroy() end
+                end
+                if settings_module then
+                    local panel = Instance.new("ScrollingFrame", MainPanel)
+                    panel.Name = "WeaponConfigPanel_"..tool.Name
+                    panel.Size = UDim2.new(1, -28, 0, 300)
+                    panel.Position = UDim2.new(0, 14, 0, 130)
+                    panel.BackgroundColor3 = Theme.Button
+                    panel.BackgroundTransparency = 0.08
+                    panel.BorderSizePixel = 0
+                    panel.CanvasSize = UDim2.new(0, 0, 0, 800)
+                    panel.ScrollBarThickness = 4
+                    panel.ZIndex = 502
+                    local panelCorner = Instance.new("UICorner", panel)
+                    panelCorner.CornerRadius = UDim.new(0, 9)
+                    local layout = Instance.new("UIListLayout", panel)
+                    layout.Padding = UDim.new(0, 12)
+                    local padding = Instance.new("UIPadding", panel)
+                    padding.PaddingTop = UDim.new(0, 8)
+                    padding.PaddingBottom = UDim.new(0, 8)
+                    padding.PaddingLeft = UDim.new(0, 8)
+                    padding.PaddingRight = UDim.new(0, 8)
+
+                    local label = Instance.new("TextLabel", panel)
+                    label.Size = UDim2.new(1, 0, 0, 26)
+                    label.Text = "Config for: "..tool.Name
+                    label.Font = Enum.Font.GothamBold
+                    label.TextColor3 = Theme.Accent
+                    label.TextSize = 18
+                    label.BackgroundTransparency = 1
+                    label.ZIndex = 503
+
+                    local infiniteAmmoButton = Instance.new("TextButton", panel)
+                    infiniteAmmoButton.Size = UDim2.new(0.4, 0, 0, 30)
+                    infiniteAmmoButton.BackgroundColor3 = Theme.Accent
+                    infiniteAmmoButton.Text = "Infinite Ammo"
+                    infiniteAmmoButton.Font = Enum.Font.Gotham
+                    infiniteAmmoButton.TextColor3 = Color3.new(1, 1, 1)
+                    infiniteAmmoButton.TextSize = 16
+                    infiniteAmmoButton.BorderSizePixel = 0
+                    infiniteAmmoButton.ZIndex = 503
+                    local infAmmoCorner = Instance.new("UICorner", infiniteAmmoButton)
+                    infAmmoCorner.CornerRadius = UDim.new(0, 7)
+                    infiniteAmmoButton.MouseButton1Click:Connect(function()
+                        pcall(function()
+                            module.Ammo = 99999
+                            module.StoredAmmo = 99999
+                            module.AmmoInGun = 99999
+                            module.IncludeChamberedBullet = false
+                            if settings_module then
+                                settings_module.Ammo = module.Ammo
+                                settings_module.StoredAmmo = module.StoredAmmo
+                                settings_module.AmmoInGun = module.AmmoInGun
+                                settings_module.IncludeChamberedBullet = module.IncludeChamberedBullet
+                                createNotification("Infinite Ammo applied", "success")
+                            end
+                        end)
+                    end)
+
+                    local zeroRecoilButton = Instance.new("TextButton", panel)
+                    zeroRecoilButton.Size = UDim2.new(0.4, 0, 0, 30)
+                    zeroRecoilButton.BackgroundColor3 = Theme.Accent
+                    zeroRecoilButton.Text = "Zero Recoil"
+                    zeroRecoilButton.Font = Enum.Font.Gotham
+                    zeroRecoilButton.TextColor3 = Color3.new(1, 1, 1)
+                    zeroRecoilButton.TextSize = 16
+                    zeroRecoilButton.BorderSizePixel = 0
+                    zeroRecoilButton.ZIndex = 503
+                    local zeroRecoilCorner = Instance.new("UICorner", zeroRecoilButton)
+                    zeroRecoilCorner.CornerRadius = UDim.new(0, 7)
+                    zeroRecoilButton.MouseButton1Click:Connect(function()
+                        pcall(function()
+                            module.camRecoil = {camRecoilUp = {0, 0}, camRecoilTilt = {0, 0}, camRecoilLeft = {0, 0}, camRecoilRight = {0, 0}}
+                            module.gunRecoil = {gunRecoilUp = {0, 0}, gunRecoilTilt = {0, 0}, gunRecoilLeft = {0, 0}, gunRecoilRight = {0, 0}}
+                            if settings_module then
+                                settings_module.camRecoil = module.camRecoil
+                                settings_module.gunRecoil = module.gunRecoil
+                                createNotification("Zero Recoil applied", "success")
+                            end
+                        end)
+                    end)
+
+                    local maxDamageButton = Instance.new("TextButton", panel)
+                    maxDamageButton.Size = UDim2.new(0.4, 0, 0, 30)
+                    maxDamageButton.BackgroundColor3 = Theme.Accent
+                    maxDamageButton.Text = "Max Damage"
+                    maxDamageButton.Font = Enum.Font.Gotham
+                    maxDamageButton.TextColor3 = Color3.new(1, 1, 1)
+                    maxDamageButton.TextSize = 16
+                    maxDamageButton.BorderSizePixel = 0
+                    maxDamageButton.ZIndex = 503
+                    local maxDamageCorner = Instance.new("UICorner", maxDamageButton)
+                    maxDamageCorner.CornerRadius = UDim.new(0, 7)
+                    maxDamageButton.MouseButton1Click:Connect(function()
+                        pcall(function()
+                            module.LimbDamage = {1000, 1000}
+                            module.TorsoDamage = {1000, 1000}
+                            module.HeadDamage = {1000, 1000}
+                            if settings_module then
+                                settings_module.LimbsDamage = module.LimbDamage
+                                settings_module.TorsoDamage = module.TorsoDamage
+                                settings_module.HeadDamage = module.HeadDamage
+                                createNotification("Max Damage applied", "success")
+                            end
+                        end)
+                    end)
+
+                    local resetWeaponButton = Instance.new("TextButton", panel)
+                    resetWeaponButton.Size = UDim2.new(0.4, 0, 0, 30)
+                    resetWeaponButton.BackgroundColor3 = Theme.Button
+                    resetWeaponButton.Text = "Reset Weapon"
+                    resetWeaponButton.Font = Enum.Font.Gotham
+                    resetWeaponButton.TextColor3 = Color3.new(1, 1, 1)
+                    resetWeaponButton.TextSize = 16
+                    resetWeaponButton.BorderSizePixel = 0
+                    resetWeaponButton.ZIndex = 503
+                    local resetCorner = Instance.new("UICorner", resetWeaponButton)
+                    resetCorner.CornerRadius = UDim.new(0, 7)
+                    resetWeaponButton.MouseButton1Click:Connect(function()
+                        pcall(function()
+                            if settings_module then
+                                module.ShootRate = defaultSettings.ShootRate
+                                module.Ammo = defaultSettings.Ammo
+                                module.StoredAmmo = defaultSettings.StoredAmmo
+                                module.AmmoInGun = defaultSettings.AmmoInGun
+                                module.IncludeChamberedBullet = defaultSettings.IncludeChamberedBullet
+                                module.FireModes = defaultSettings.FireModes
+                                module.camRecoil = defaultSettings.camRecoil
+                                module.gunRecoil = defaultSettings.gunRecoil
+                                module.LimbDamage = defaultSettings.LimbDamage
+                                module.TorsoDamage = defaultSettings.TorsoDamage
+                                module.HeadDamage = defaultSettings.HeadDamage
+                                module.MinSpread = defaultSettings.MinSpread
+                                module.MaxSpread = defaultSettings.MaxSpread
+                                module.AimInaccuracyStepAmount = defaultSettings.AimInaccuracyStepAmount
+                                module.MuzzleVelocity = defaultSettings.MuzzleVelocity
+                                module.BulletPenetration = defaultSettings.BulletPenetration
+                                module.adsTime = defaultSettings.adsTime
+                                module.CrossHair = defaultSettings.CrossHair
+                                module.CenterDot = defaultSettings.CenterDot
+                                module.Tracer = defaultSettings.Tracer
+                                settings_module.FireRate = module.ShootRate
+                                settings_module.Ammo = module.Ammo
+                                settings_module.StoredAmmo = module.StoredAmmo
+                                settings_module.AmmoInGun = module.AmmoInGun
+                                settings_module.IncludeChamberedBullet = module.IncludeChamberedBullet
+                                settings_module.FireModes = module.FireModes
+                                settings_module.VRecoil = module.camRecoil.camRecoilUp
+                                settings_module.HRecoil = module.camRecoil.camRecoilLeft
+                                settings_module.LimbsDamage = module.LimbDamage
+                                settings_module.TorsoDamage = module.TorsoDamage
+                                settings_module.HeadDamage = module.HeadDamage
+                                settings_module.MinSpread = module.MinSpread
+                                settings_module.MaxSpread = module.MaxSpread
+                                settings_module.AimInaccuracyStepAmount = module.AimInaccuracyStepAmount
+                                settings_module.BSpeed = module.MuzzleVelocity
+                                settings_module.BulletPenetration = module.BulletPenetration
+                                settings_module.adsTime = module.adsTime
+                                settings_module.CrossHair = module.CrossHair
+                                settings_module.CenterDot = module.CenterDot
+                                settings_module.Tracer = module.Tracer
+                                createNotification("Weapon settings reset", "success")
+                                for _, sliderData in ipairs(sliders) do
+                                    local sliderFrame, sliderBar, valueLabel, min, max, property = unpack(sliderData)
+                                    local value = module
+                                    for part in property:gmatch("[^.]+") do
+                                        value = value[part]
+                                    end
+                                    sliderBar.Size = UDim2.new((value - min)/(max - min), 0, 1, 0)
+                                    valueLabel.Text = tostring(value)
+                                end
+                                updateToggles()
+                            end
+                        end)
+                    end)
+
+                    sliders[#sliders + 1] = {createSlider(panel, "Fire Rate (RPM)", 100, 10000, module.ShootRate, "ShootRate")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Limb Damage", 0, 1000, module.LimbDamage[1], "LimbDamage[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Torso Damage", 0, 1000, module.TorsoDamage[1], "TorsoDamage[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Head Damage", 0, 1000, module.HeadDamage[1], "HeadDamage[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Min Spread", 0, 10, module.MinSpread, "MinSpread")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Max Spread", 0, 200, module.MaxSpread, "MaxSpread")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Aim Inaccuracy", 0, 5, module.AimInaccuracyStepAmount, "AimInaccuracyStepAmount")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Muzzle Velocity", 500, 5000, module.MuzzleVelocity, "MuzzleVelocity")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Bullet Penetration", 0, 200, module.BulletPenetration, "BulletPenetration")}
+                    sliders[#sliders + 1] = {createSlider(panel, "ADS Time", 0, 2, module.adsTime, "adsTime")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Cam Recoil Up", 0, 100, module.camRecoil.camRecoilUp[1], "camRecoil.camRecoilUp[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Cam Recoil Tilt", 0, 100, module.camRecoil.camRecoilTilt[1], "camRecoil.camRecoilTilt[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Cam Recoil Left", 0, 100, module.camRecoil.camRecoilLeft[1], "camRecoil.camRecoilLeft[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Cam Recoil Right", 0, 100, module.camRecoil.camRecoilRight[1], "camRecoil.camRecoilRight[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Gun Recoil Up", 0, 100, module.gunRecoil.gunRecoilUp[1], "gunRecoil.gunRecoilUp[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Gun Recoil Tilt", 0, 100, module.gunRecoil.gunRecoilTilt[1], "gunRecoil.gunRecoilTilt[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Gun Recoil Left", 0, 100, module.gunRecoil.gunRecoilLeft[1], "gunRecoil.gunRecoilLeft[1]")}
+                    sliders[#sliders + 1] = {createSlider(panel, "Gun Recoil Right", 0, 100, module.gunRecoil.gunRecoilRight[1], "gunRecoil.gunRecoilRight[1]")}
+                    createToggle(panel, "Auto Fire", "FireModes.Auto")
+                    createToggle(panel, "Semi Fire", "FireModes.Semi")
+                    createToggle(panel, "Burst Fire", "FireModes.Burst")
+                    createToggle(panel, "Change Firemode", "FireModes.ChangeFiremode")
+                    createToggle(panel, "Crosshair", "CrossHair")
+                    createToggle(panel, "Center Dot", "CenterDot")
+                    createToggle(panel, "Tracer", "Tracer")
+                end
+            end)
+        end)
+    end
+
+    dropdownButton.MouseButton1Click:Connect(function()
+        dropdownFrame.Visible = not dropdownFrame.Visible
+    end)
+
+    if #weaponList == 0 then
+        local warn = Instance.new("TextLabel", MainPanel)
+        warn.Size = UDim2.new(1, -30, 0, 70)
+        warn.Position = UDim2.new(0, 15, 0, 100)
+        warn.Font = Enum.Font.GothamBold
+        warn.TextSize = 18
+        warn.TextWrapped = true
+        warn.TextColor3 = Color3.fromRGB(243, 106, 128)
+        warn.Text = "⚠️ No weapons with ACS settings found!"
+        warn.BackgroundTransparency = 1
+        warn.ZIndex = 502
+    end
+end
+
+PanelMap["Vehicle Settings"] = function()
+    ClearMainPanel()
+    local lbl = Instance.new("TextLabel", MainPanel)
+    lbl.Size = UDim2.new(1, -28, 0, 36)
+    lbl.Position = UDim2.new(0, 14, 0, 18)
+    lbl.Text = "Vehicle Mods & Toggles:"
+    lbl.Font = Enum.Font.GothamSemibold
+    lbl.TextSize = 18
+    lbl.TextColor3 = Theme.Accent
+    lbl.BackgroundTransparency = 1
+    lbl.ZIndex = 502
+
+    local scrollFrame = Instance.new("ScrollingFrame", MainPanel)
+    scrollFrame.Size = UDim2.new(1, -28, 0, 300)
+    scrollFrame.Position = UDim2.new(0, 14, 0, 60)
+    scrollFrame.BackgroundColor3 = Theme.Button
+    scrollFrame.BackgroundTransparency = 0.08
+    scrollFrame.BorderSizePixel = 0
+    scrollFrame.ScrollBarThickness = 4
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 600)
+    scrollFrame.ZIndex = 502
+    local layout = Instance.new("UIListLayout", scrollFrame)
+    layout.Padding = UDim.new(0, 12)
+    local padding = Instance.new("UIPadding", scrollFrame)
+    padding.PaddingTop = UDim.new(0, 8)
+    padding.PaddingBottom = UDim.new(0, 8)
+    padding.PaddingLeft = UDim.new(0, 8)
+    padding.PaddingRight = UDim.new(0, 8)
+
+    local resetVehicleButton = Instance.new("TextButton", scrollFrame)
+    resetVehicleButton.Size = UDim2.new(1, 0, 0, 30)
+    resetVehicleButton.BackgroundColor3 = Theme.Button
+    resetVehicleButton.Text = "Reset Vehicle Settings"
+    resetVehicleButton.Font = Enum.Font.Gotham
+    resetVehicleButton.TextColor3 = Color3.new(1, 1, 1)
+    resetVehicleButton.TextSize = 16
+    resetVehicleButton.BorderSizePixel = 0
+    resetVehicleButton.ZIndex = 503
+    local resetCorner = Instance.new("UICorner", resetVehicleButton)
+    resetCorner.CornerRadius = UDim.new(0, 7)
+    resetVehicleButton.MouseButton1Click:Connect(function()
+        pcall(function()
+            module.VehicleEnabled = defaultSettings.VehicleEnabled
+            module.FlightEnabled = defaultSettings.FlightEnabled
+            module.FlightSpeed = defaultSettings.FlightSpeed
+            module.VelocityMult = defaultSettings.VelocityMult
+            module.BrakeForce = defaultSettings.BrakeForce
+            module.SpringsVisible = defaultSettings.SpringsVisible
+            createNotification("Vehicle settings reset", "success")
+            for _, sliderData in ipairs(sliders) do
+                local sliderFrame, sliderBar, valueLabel, min, max, property = unpack(sliderData)
+                if property:find("Vehicle") or property == "FlightSpeed" or property == "VelocityMult" or property == "BrakeForce" or property == "SpringsVisible" then
+                    local value = module[property]
+                    local displayValue = value
+                    if property == "FlightSpeed" then
+                        displayValue = value * 100
+                    elseif property == "VelocityMult" or property == "BrakeForce" then
+                        displayValue = value * 1000
+                    end
+                    sliderBar.Size = UDim2.new((displayValue - min)/(max - min), 0, 1, 0)
+                    valueLabel.Text = tostring(math.floor(displayValue))
+                end
+            end
+            updateToggles()
+        end)
+    end)
+
+    createToggle(scrollFrame, "Vehicle Controls", "VehicleEnabled")
+    createToggle(scrollFrame, "Flight Enabled", "FlightEnabled")
+    createToggle(scrollFrame, "Springs Visible", "SpringsVisible")
+    sliders[#sliders + 1] = {createSlider(scrollFrame, "Flight Speed", 0, 800, module.FlightSpeed * 100, "FlightSpeed")}
+    sliders[#sliders + 1] = {createSlider(scrollFrame, "Acceleration (Thou)", 0, 50, module.VelocityMult * 1000, "VelocityMult")}
+    sliders[#sliders + 1] = {createSlider(scrollFrame, "Brake Force (Thou)", 0, 300, module.BrakeForce * 1000, "BrakeForce")}
+
+    velocityKeybindButton = Instance.new("TextButton", scrollFrame)
+    velocityKeybindButton.Size = UDim2.new(1, 0, 0, 40)
+    velocityKeybindButton.Text = "Velocity Key: " .. (keybinds.velocityKey.Type == "KeyCode" and keybinds.velocityKey.Value.Name or keybinds.velocityKey.Value.Name)
+    velocityKeybindButton.TextColor3 = Theme.Text
+    velocityKeybindButton.BackgroundColor3 = Theme.Button
+    velocityKeybindButton.Font = Enum.Font.Gotham
+    velocityKeybindButton.TextSize = 16
+    velocityKeybindButton.ZIndex = 503
+    local velocityCorner = Instance.new("UICorner", velocityKeybindButton)
+    velocityCorner.CornerRadius = UDim.new(0, 8)
+    velocityKeybindButton.MouseButton1Click:Connect(function()
+        velocityKeybindButton.Text = "Press a key/mouse button..."
+        rebinding = "velocityKey"
+    end)
+
+    brakeKeybindButton = Instance.new("TextButton", scrollFrame)
+    brakeKeybindButton.Size = UDim2.new(1, 0, 0, 40)
+    brakeKeybindButton.Text = "Brake Key: " .. (keybinds.brakeKey.Type == "KeyCode" and keybinds.brakeKey.Value.Name or keybinds.brakeKey.Value.Name)
+    brakeKeybindButton.TextColor3 = Theme.Text
+    brakeKeybindButton.BackgroundColor3 = Theme.Button
+    brakeKeybindButton.Font = Enum.Font.Gotham
+    brakeKeybindButton.TextSize = 16
+    brakeKeybindButton.ZIndex = 503
+    local brakeCorner = Instance.new("UICorner", brakeKeybindButton)
+    brakeCorner.CornerRadius = UDim.new(0, 8)
+    brakeKeybindButton.MouseButton1Click:Connect(function()
+        brakeKeybindButton.Text = "Press a key/mouse button..."
+        rebinding = "brakeKey"
+    end)
+
+    local stopVehicleButton = Instance.new("TextButton", scrollFrame)
+    stopVehicleButton.Size = UDim2.new(1, 0, 0, 40)
+    stopVehicleButton.Text = "Stop Vehicle"
+    stopVehicleButton.TextColor3 = Theme.Text
+    stopVehicleButton.BackgroundColor3 = Theme.Button
+    stopVehicleButton.Font = Enum.Font.Gotham
+    stopVehicleButton.TextSize = 16
+    stopVehicleButton.ZIndex = 503
+    local stopCorner = Instance.new("UICorner", stopVehicleButton)
+    stopCorner.CornerRadius = UDim.new(0, 8)
+    stopVehicleButton.MouseButton1Click:Connect(function()
+        pcall(function()
+            local Character = player.Character
+            if Character and typeof(Character) == "Instance" then
+                local Humanoid = Character:FindFirstChildWhichIsA("Humanoid")
+                if Humanoid and typeof(Humanoid) == "Instance" then
+                    local SeatPart = Humanoid.SeatPart
+                    if SeatPart and typeof(SeatPart) == "Instance" and SeatPart:IsA("VehicleSeat") then
+                        SeatPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        SeatPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                        createNotification("Vehicle stopped", "success")
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+PanelMap["Teams"] = function()
+    ClearMainPanel()
+    updateTeamList()
+
+    local lbl = Instance.new("TextLabel", MainPanel)
+    lbl.Size = UDim2.new(0, 150, 0, 36)
+    lbl.Position = UDim2.new(0, 14, 0, 14)
+    lbl.Text = "Switch Teams:"
+    lbl.Font = Enum.Font.GothamSemibold
+    lbl.TextSize = 18
+    lbl.TextColor3 = Theme.Accent
+    lbl.BackgroundTransparency = 1
+    lbl.ZIndex = 502
+
+    local teamFrame = Instance.new("ScrollingFrame", MainPanel)
+    teamFrame.Size = UDim2.new(1, -28, 0, 300)
+    teamFrame.Position = UDim2.new(0, 14, 0, 54)
+    teamFrame.BackgroundColor3 = Theme.Button
+    teamFrame.BackgroundTransparency = 0.08
+    teamFrame.BorderSizePixel = 0
+    teamFrame.ScrollBarThickness = 4
+    teamFrame.CanvasSize = UDim2.new(0, 0, 0, math.ceil(#teamList / 3) * 50)
+    teamFrame.ZIndex = 502
+    local gridLayout = Instance.new("UIGridLayout", teamFrame)
+    gridLayout.CellSize = UDim2.new(0, 150, 0, 40)
+    gridLayout.CellPadding = UDim2.new(0, 10, 0, 10)
+    gridLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    local padding = Instance.new("UIPadding", teamFrame)
+    padding.PaddingTop = UDim.new(0, 8)
+    padding.PaddingLeft = UDim.new(0, 8)
+
+    for i, team in ipairs(teamList) do
+        local tbtn = Instance.new("TextButton", teamFrame)
+        tbtn.Size = UDim2.new(0, 150, 0, 40)
+        tbtn.BackgroundColor3 = Teams:FindFirstChild(team) and Teams:FindFirstChild(team).TeamColor.Color or Theme.Button
+        tbtn.Text = team
+        tbtn.Font = Enum.Font.GothamSemibold
+        tbtn.TextSize = 14
+        tbtn.TextScaled = true
+        tbtn.TextColor3 = Color3.fromRGB(40, 40, 40)
+        tbtn.BorderSizePixel = 0
+        tbtn.ZIndex = 503
+        local corner = Instance.new("UICorner", tbtn)
+        corner.CornerRadius = UDim.new(0, 8)
+        tbtn.MouseButton1Click:Connect(function()
+            setTeam(team)
+        end)
+    end
+
+    local resetTeamButton = Instance.new("TextButton", MainPanel)
+    resetTeamButton.Size = UDim2.new(0, 135, 0, 31)
+    resetTeamButton.Position = UDim2.new(0, 174, 0, 14)
+    resetTeamButton.BackgroundColor3 = Theme.Button
+    resetTeamButton.Text = "Reset to Neutral"
+    resetTeamButton.Font = Enum.Font.Gotham
+    resetTeamButton.TextSize = 15
+    resetTeamButton.TextColor3 = Color3.new(1, 1, 1)
+    resetTeamButton.BorderSizePixel = 0
+    resetTeamButton.ZIndex = 503
+    local resetCorner = Instance.new("UICorner", resetTeamButton)
+    resetCorner.CornerRadius = UDim.new(0, 7)
+    resetTeamButton.MouseButton1Click:Connect(function()
+        pcall(function()
+            player.Neutral = true
+            module.Team = nil
+            createNotification("Team reset to neutral", "success")
+        end)
+    end)
+end
+
+    PanelMap["Settings"] = function()
+    ClearMainPanel()
+    local lbl = Instance.new("TextLabel", MainPanel)
+    lbl.Size = UDim2.new(1, -28, 0, 38)
+    lbl.Position = UDim2.new(0, 14, 0, 18)
+    lbl.Text = "Customize Your GUI Experience:"
+    lbl.Font = Enum.Font.GothamSemibold
+    lbl.TextSize = 19
+    lbl.TextColor3 = Theme.Accent
+    lbl.BackgroundTransparency = 1
+    lbl.ZIndex = 502
+
+    local themes = {
+        {name="Default", accent=Color3.fromRGB(164, 114, 255), main=Color3.fromRGB(24, 16, 32), sidebar=Color3.fromRGB(41, 26, 64), button=Color3.fromRGB(46, 34, 72)},
+        {name="Pink", accent=Color3.fromRGB(255, 85, 227), main=Color3.fromRGB(56, 7, 40), sidebar=Color3.fromRGB(72, 12, 52), button=Color3.fromRGB(80, 20, 60)},
+        {name="Emerald", accent=Color3.fromRGB(60, 255, 170), main=Color3.fromRGB(13, 40, 32), sidebar=Color3.fromRGB(20, 50, 40), button=Color3.fromRGB(25, 60, 45)},
+        {name="Gold", accent=Color3.fromRGB(240, 210, 170), main=Color3.fromRGB(35, 27, 9), sidebar=Color3.fromRGB(50, 40, 15), button=Color3.fromRGB(60, 50, 20)}
+    }
+    local themeLbl = Instance.new("TextLabel", MainPanel)
+    themeLbl.Size = UDim2.new(0, 140, 0, 24)
+    themeLbl.Position = UDim2.new(0, 18, 0, 70)
+    themeLbl.BackgroundTransparency = 1
+    themeLbl.Text = "Theme:"
+    themeLbl.Font = Enum.Font.Gotham
+    themeLbl.TextSize = 16
+    themeLbl.TextColor3 = Theme.Text
+    themeLbl.TextXAlignment = Enum.TextXAlignment.Left
+    themeLbl.ZIndex = 502
+
+    for i, t in ipairs(themes) do
+        local thmBtn = Instance.new("TextButton", MainPanel)
+        thmBtn.Size = UDim2.new(0, 86, 0, 28)
+        thmBtn.Position = UDim2.new(0, 85 + (97 * (i - 1)), 0, 68)
+        thmBtn.Text = t.name
+        thmBtn.Font = Enum.Font.Gotham
+        thmBtn.TextSize = 14
+        thmBtn.TextColor3 = Theme.Text
+        thmBtn.BackgroundColor3 = t.button
+        thmBtn.ZIndex = 503
+        local corner = Instance.new("UICorner", thmBtn)
+        corner.CornerRadius = UDim.new(0, 6)
+        thmBtn.MouseButton1Click:Connect(function()
+            pcall(function()
+                Theme.Accent = t.accent
+                Theme.WindowBG = t.main
+                Theme.Sidebar = t.sidebar
+                Theme.Button = t.button
+                Theme.ButtonActive = t.accent
+                Theme.MainBG = t.main
+                Theme.Title = t.accent
+                MainFrame.BackgroundColor3 = Theme.WindowBG
+                Sidebar.BackgroundColor3 = Theme.Sidebar
+                TopBar.BackgroundColor3 = Theme.Sidebar
+                MainPanel.BackgroundColor3 = Theme.MainBG
+                TitleLabel.TextColor3 = Theme.Title
+                controlFrame.BackgroundColor3 = Theme.Sidebar
+                reopenButton.BackgroundColor3 = Theme.Button
+                for _, btn in pairs(SidebarBtns) do
+                    btn.BackgroundColor3 = btn.Name == CurrentTab:gsub(" ", "").."Btn" and Theme.Accent or Theme.Button
+                end
+                for _, child in ipairs(MainPanel:GetDescendants()) do
+                    if child:IsA("Frame") and child.BackgroundColor3 == Theme.Button then
+                        child.BackgroundColor3 = Theme.Button
+                    elseif child:IsA("TextButton") and child.BackgroundColor3 ~= Color3.fromRGB(0, 120, 0) and child.BackgroundColor3 ~= Color3.fromRGB(120, 0, 0) then
+                        child.BackgroundColor3 = Theme.Button
+                    elseif child:IsA("TextLabel") and child.TextColor3 == Theme.Accent then
+                        child.TextColor3 = Theme.Accent
+                    end
+                end
+                for _, sliderData in ipairs(sliders) do
+                    local sliderFrame, sliderBar = unpack(sliderData)
+                    sliderFrame.BackgroundColor3 = Theme.Button
+                    sliderBar.BackgroundColor3 = Theme.Accent
+                end
+                createNotification("Theme changed to " .. t.name, "success")
+            end)
+        end)
+    end
+
+    keyBindBox = Instance.new("TextButton", MainPanel)
+    keyBindBox.Size = UDim2.new(0, 200, 0, 40)
+    keyBindBox.Position = UDim2.new(0, 18, 0, 110)
+    keyBindBox.Text = keybinds.guiToggle.Type == "KeyCode" and keybinds.guiToggle.Value.Name or keybinds.guiToggle.Value.Name
+    keyBindBox.TextColor3 = Theme.Text
+    keyBindBox.BackgroundColor3 = Theme.Button
+    keyBindBox.Font = Enum.Font.Gotham
+    keyBindBox.TextSize = 16
+    keyBindBox.ZIndex = 503
+    local keyBindCorner = Instance.new("UICorner", keyBindBox)
+    keyBindCorner.CornerRadius = UDim.new(0, 8)
+    keyBindBox.MouseButton1Click:Connect(function()
+        pcall(function()
+            keyBindBox.Text = "Press a key/mouse button..."
+            rebinding = "guiToggle"
+        end)
+    end)
+
+    minimizeKeybindButton = Instance.new("TextButton", MainPanel)
+    minimizeKeybindButton.Size = UDim2.new(0, 200, 0, 40)
+    minimizeKeybindButton.Position = UDim2.new(0, 18, 0, 160)
+    minimizeKeybindButton.Text = "Minimize Key: " .. (keybinds.minimizeKey.Type == "KeyCode" and keybinds.minimizeKey.Value.Name or keybinds.minimizeKey.Value.Name)
+    minimizeKeybindButton.TextColor3 = Theme.Text
+    minimizeKeybindButton.BackgroundColor3 = Theme.Button
+    minimizeKeybindButton.Font = Enum.Font.Gotham
+    minimizeKeybindButton.TextSize = 16
+    minimizeKeybindButton.ZIndex = 503
+    local minimizeCorner = Instance.new("UICorner", minimizeKeybindButton)
+    minimizeCorner.CornerRadius = UDim.new(0, 8)
+    minimizeKeybindButton.MouseButton1Click:Connect(function()
+        pcall(function()
+            minimizeKeybindButton.Text = "Press a key/mouse button..."
+            rebinding = "minimizeKey"
+        end)
+    end)
+end
+
+function updateToggles()
+    pcall(function()
+        for _, child in ipairs(MainPanel:GetDescendants()) do
+            if child:IsA("TextButton") and child.Text == "ON" or child.Text == "OFF" then
+                local property = child.Parent.Name
+                if module[property] ~= nil then
+                    child.Text = module[property] and "ON" or "OFF"
+                    child.BackgroundColor3 = module[property] and Color3.fromRGB(0, 120, 0) or Color3.fromRGB(120, 0, 0)
+                elseif module.FireModes and property:find("FireModes") then
+                    local mode = property:match("FireModes%.(.+)")
+                    child.Text = module.FireModes[mode] and "ON" or "OFF"
+                    child.BackgroundColor3 = module.FireModes[mode] and Color3.fromRGB(0, 120, 0) or Color3.fromRGB(120, 0, 0)
+                end
+            end
+        end
+    end)
+end
+
+SwitchTab("Home")
