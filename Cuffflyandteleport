@@ -1,0 +1,1529 @@
+--// CuffFlyAndTeleportUI.lua - Enhanced Version with Imprisonment System
+-- Enhanced moderation tool with imprisonment, frisk, release, and complete mod toolkit
+-- Designed for Roblox RP server moderation with a clean white/gray aesthetic
+-- Made by sympx2 | Discord: bebeben | Enhanced for moderation use
+
+--// CORE SERVICES
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- Wait for player
+local player = Players.LocalPlayer
+if not player then
+    game.Players.PlayerAdded:Wait()
+    player = Players.LocalPlayer
+end
+
+--// THEME SETTINGS
+local Theme = {
+    WindowBG = Color3.fromRGB(240, 240, 240),
+    Accent = Color3.fromRGB(100, 100, 100),
+    Button = Color3.fromRGB(200, 200, 200),
+    ButtonActive = Color3.fromRGB(150, 150, 150),
+    Text = Color3.fromRGB(50, 50, 50),
+    Placeholder = Color3.fromRGB(120, 120, 120),
+    Success = Color3.fromRGB(100, 200, 100),
+    Error = Color3.fromRGB(200, 100, 100),
+    Settings = Color3.fromRGB(70, 130, 180),
+    Warning = Color3.fromRGB(255, 165, 0),
+    Prison = Color3.fromRGB(180, 50, 50)
+}
+
+--// KEYBIND SETTINGS
+local KeybindSettings = {
+    toggleGui = Enum.KeyCode.LeftControl,
+    quickCuff = Enum.KeyCode.C,
+    quickFlight = Enum.KeyCode.F,
+    quickTeleport = Enum.KeyCode.T,
+    quickImprison = Enum.KeyCode.I,
+    quickRelease = Enum.KeyCode.R
+}
+
+--// GLOBAL VARIABLES
+local flying = false
+local flightSpeed = 50
+local minFlightSpeed = 10
+local maxFlightSpeed = 200
+local prisonTime = 600 -- Default 10 minutes
+local minPrisonTime = 120 -- 2 minutes
+local maxPrisonTime = 1200 -- 20 minutes (client limit)
+local bodyVelocity, bodyGyro
+local mainGui, mainFrame, settingsFrame, usernameBox, teleportToButton, bringToButton, cuffButton, imprisonButton, releaseButton, friskButton, flightToggleButton, speedSlider, speedLabel, prisonSlider, prisonLabel, reasonBox
+local suggestionFrame, suggestionButtons = {}, {}
+local dragging, dragStart, startPos
+local lastCuffSuccess = false
+local handcuffsEquipped = false
+local handcuffsTool = nil
+local isMinimized = false
+local controlFrame
+local currentUserInput = ""
+local waitingForKeybind = nil
+local currentDetainedPlayer = nil
+
+-- Common arrest reasons
+local commonReasons = {
+    "RDM (Random Death Match)",
+    "VDM (Vehicle Death Match)", 
+    "FailRP (Fail Roleplay)",
+    "Exploiting/Cheating",
+    "LTAP (Leave to Avoid Punishment)",
+    "Breaking Character",
+    "Metagaming",
+    "Powergaming",
+    "NITRP (No Intent to Roleplay)",
+    "Custom..."
+}
+
+--// UTILITY FUNCTIONS
+local function getKeyCodeName(keyCode)
+    local keyNames = {
+        [Enum.KeyCode.LeftControl] = "Left Ctrl",
+        [Enum.KeyCode.RightControl] = "Right Ctrl",
+        [Enum.KeyCode.LeftShift] = "Left Shift",
+        [Enum.KeyCode.RightShift] = "Right Shift",
+        [Enum.KeyCode.LeftAlt] = "Left Alt",
+        [Enum.KeyCode.RightAlt] = "Right Alt",
+        [Enum.KeyCode.Space] = "Space",
+        [Enum.KeyCode.Return] = "Enter",
+        [Enum.KeyCode.Backspace] = "Backspace",
+        [Enum.KeyCode.Tab] = "Tab"
+    }
+    return keyNames[keyCode] or string.sub(tostring(keyCode), 14) -- Remove "Enum.KeyCode."
+end
+
+local function formatTime(seconds)
+    local minutes = math.floor(seconds / 60)
+    local remainingSeconds = seconds % 60
+    return string.format("%d:%02d", minutes, remainingSeconds)
+end
+
+local function findPlayerByPartialName(partialName)
+    if not partialName or partialName == "" then return {} end
+    
+    local matches = {}
+    local lowerPartial = string.lower(partialName)
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer then
+            -- Check username
+            if string.find(string.lower(player.Name), lowerPartial, 1, true) then
+                table.insert(matches, {player = player, matchType = "username"})
+            end
+            -- Check display name
+            if player.DisplayName ~= player.Name and string.find(string.lower(player.DisplayName), lowerPartial, 1, true) then
+                table.insert(matches, {player = player, matchType = "display"})
+            end
+        end
+    end
+    
+    -- Sort by relevance (exact matches first, then starts with, then contains)
+    table.sort(matches, function(a, b)
+        local aName = a.matchType == "display" and a.player.DisplayName or a.player.Name
+        local bName = b.matchType == "display" and b.player.DisplayName or b.player.Name
+        local aLower, bLower = string.lower(aName), string.lower(bName)
+        
+        if string.find(aLower, "^" .. lowerPartial) and not string.find(bLower, "^" .. lowerPartial) then
+            return true
+        elseif not string.find(aLower, "^" .. lowerPartial) and string.find(bLower, "^" .. lowerPartial) then
+            return false
+        end
+        return aName < bName
+    end)
+    
+    return matches
+end
+
+local function findPlayerByName(name)
+    if not name or name == "" then return nil end
+    
+    -- First try exact username match
+    local exactUser = Players:FindFirstChild(name)
+    if exactUser then return exactUser end
+    
+    -- Then try exact display name match
+    for _, player in pairs(Players:GetPlayers()) do
+        if player.DisplayName == name then
+            return player
+        end
+    end
+    
+    -- Finally try case-insensitive partial matches
+    local lowerName = string.lower(name)
+    for _, player in pairs(Players:GetPlayers()) do
+        if string.lower(player.Name) == lowerName or string.lower(player.DisplayName) == lowerName then
+            return player
+        end
+    end
+    
+    return nil
+end
+
+--// HANDCUFFS DETECTION AND AUTO-EQUIP
+local function findHandcuffs()
+    local backpack = player:FindFirstChild("Backpack")
+    local character = player.Character
+    
+    -- Check if already equipped
+    if character and character:FindFirstChild("Handcuffs") then
+        handcuffsTool = character.Handcuffs
+        handcuffsEquipped = true
+        return handcuffsTool
+    end
+    
+    -- Check backpack
+    if backpack then
+        handcuffsTool = backpack:FindFirstChild("Handcuffs")
+        if handcuffsTool then
+            handcuffsEquipped = false
+            return handcuffsTool
+        end
+    end
+    
+    return nil
+end
+
+local function autoEquipHandcuffs()
+    if handcuffsEquipped then return true end
+    
+    local cuffs = findHandcuffs()
+    if not cuffs then
+        createNotification("Handcuffs tool not found in inventory", "error")
+        return false
+    end
+    
+    pcall(function()
+        local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid:EquipTool(cuffs)
+            handcuffsEquipped = true
+            handcuffsTool = cuffs
+            createNotification("Auto-equipped handcuffs", "success", 2)
+        end
+    end)
+    
+    return handcuffsEquipped
+end
+
+local function monitorHandcuffsEquip()
+    local character = player.Character
+    if not character then return end
+    
+    -- Monitor when handcuffs are equipped/unequipped
+    character.ChildAdded:Connect(function(child)
+        if child.Name == "Handcuffs" then
+            handcuffsTool = child
+            handcuffsEquipped = true
+        end
+    end)
+    
+    character.ChildRemoved:Connect(function(child)
+        if child.Name == "Handcuffs" then
+            handcuffsEquipped = false
+            handcuffsTool = nil
+        end
+    end)
+end
+
+--// NOTIFICATION FUNCTION
+local function createNotification(message, status, duration)
+    pcall(function()
+        local notification = Instance.new("TextLabel", mainGui)
+        notification.Size = UDim2.new(0, 350, 0, 50)
+        notification.Position = UDim2.new(0.5, -175, 0.05, 0)
+        notification.Text = message
+        notification.TextColor3 = Color3.fromRGB(255, 255, 255)
+        
+        if status == "success" then
+            notification.BackgroundColor3 = Theme.Success
+        elseif status == "warning" then
+            notification.BackgroundColor3 = Theme.Warning
+        elseif status == "prison" then
+            notification.BackgroundColor3 = Theme.Prison
+        else
+            notification.BackgroundColor3 = Theme.Error
+        end
+        
+        notification.BackgroundTransparency = 0.1
+        notification.TextScaled = true
+        notification.Font = Enum.Font.SourceSansBold
+        notification.ZIndex = 25000
+        local corner = Instance.new("UICorner", notification)
+        corner.CornerRadius = UDim.new(0, 8)
+        
+        -- Add stroke for better visibility
+        local stroke = Instance.new("UIStroke", notification)
+        stroke.Color = Color3.fromRGB(0, 0, 0)
+        stroke.Thickness = 1
+        stroke.Transparency = 0.5
+        
+        task.spawn(function()
+            task.wait(duration or 3)
+            if notification then
+                notification:Destroy()
+            end
+        end)
+    end)
+end
+
+--// AUTOCOMPLETE SYSTEM
+local function hideAutocompleteSuggestions()
+    if suggestionFrame then
+        suggestionFrame.Visible = false
+    end
+end
+
+local function showAutocompleteSuggestions(matches)
+    if not suggestionFrame then return end
+    
+    -- Clear existing suggestions
+    for _, button in pairs(suggestionButtons) do
+        button:Destroy()
+    end
+    suggestionButtons = {}
+    
+    if #matches == 0 then
+        hideAutocompleteSuggestions()
+        return
+    end
+    
+    -- Show up to 5 suggestions
+    local maxSuggestions = math.min(#matches, 5)
+    suggestionFrame.Size = UDim2.new(1, 0, 0, maxSuggestions * 25)
+    suggestionFrame.Visible = true
+    
+    for i = 1, maxSuggestions do
+        local match = matches[i]
+        local displayText = match.matchType == "display" and 
+            match.player.DisplayName .. " (@" .. match.player.Name .. ")" or 
+            match.player.Name
+        
+        local button = Instance.new("TextButton", suggestionFrame)
+        button.Size = UDim2.new(1, 0, 0, 25)
+        button.Position = UDim2.new(0, 0, 0, (i-1) * 25)
+        button.Text = displayText
+        button.TextColor3 = Theme.Text
+        button.BackgroundColor3 = i % 2 == 0 and Color3.fromRGB(250, 250, 250) or Color3.fromRGB(240, 240, 240)
+        button.Font = Enum.Font.SourceSans
+        button.TextSize = 12
+        button.TextXAlignment = Enum.TextXAlignment.Left
+        button.ZIndex = 15000
+        
+        -- Add padding
+        local padding = Instance.new("UIPadding", button)
+        padding.PaddingLeft = UDim.new(0, 8)
+        
+        button.MouseButton1Click:Connect(function()
+            usernameBox.Text = match.player.Name -- Always use username for commands
+            currentUserInput = match.player.Name
+            hideAutocompleteSuggestions()
+        end)
+        
+        button.MouseEnter:Connect(function()
+            button.BackgroundColor3 = Theme.ButtonActive
+        end)
+        
+        button.MouseLeave:Connect(function()
+            button.BackgroundColor3 = i % 2 == 0 and Color3.fromRGB(250, 250, 250) or Color3.fromRGB(240, 240, 240)
+        end)
+        
+        table.insert(suggestionButtons, button)
+    end
+end
+
+local function updateAutocompleteSuggestions()
+    local matches = findPlayerByPartialName(currentUserInput)
+    showAutocompleteSuggestions(matches)
+end
+
+--// FLIGHT SYSTEM WITH ADJUSTABLE SPEED
+local function updateFlightSpeed(newSpeed)
+    flightSpeed = math.clamp(newSpeed, minFlightSpeed, maxFlightSpeed)
+    if speedLabel then
+        speedLabel.Text = "Speed: " .. tostring(flightSpeed)
+    end
+end
+
+local function updatePrisonTime(newTime)
+    prisonTime = math.clamp(newTime, minPrisonTime, maxPrisonTime)
+    if prisonLabel then
+        prisonLabel.Text = "Time: " .. formatTime(prisonTime)
+    end
+end
+
+local function startFlight()
+    if flying then return end
+    pcall(function()
+        local character = player.Character
+        if not character or not character:FindFirstChild("HumanoidRootPart") or not character:FindFirstChildOfClass("Humanoid") then
+            createNotification("Cannot fly: Character not found", "error")
+            return
+        end
+        local humanoidRootPart = character.HumanoidRootPart
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        humanoid.PlatformStand = true
+
+        -- Create BodyVelocity for movement
+        bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+        bodyVelocity.Parent = humanoidRootPart
+
+        -- Create BodyGyro for orientation
+        bodyGyro = Instance.new("BodyGyro")
+        bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        bodyGyro.P = 10000
+        bodyGyro.D = 500
+        bodyGyro.Parent = humanoidRootPart
+
+        flying = true
+        if flightToggleButton then
+            flightToggleButton.Text = "✈️ Flight: ON"
+            flightToggleButton.BackgroundColor3 = Theme.Success
+        end
+        createNotification("Flight enabled (Speed: " .. flightSpeed .. ")", "success")
+
+        -- Flight control loop
+        RunService:BindToRenderStep("FlightControl", Enum.RenderPriority.Input.Value, function()
+            if not flying then return end
+            local camera = workspace.CurrentCamera
+            local moveDirection = Vector3.new(0, 0, 0)
+            
+            -- Enhanced speed control - hold shift for 2x speed
+            local currentSpeed = flightSpeed
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+                currentSpeed = flightSpeed * 2
+            end
+            
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+                moveDirection = moveDirection + camera.CFrame.LookVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+                moveDirection = moveDirection - camera.CFrame.LookVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+                moveDirection = moveDirection - camera.CFrame.RightVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+                moveDirection = moveDirection + camera.CFrame.RightVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                moveDirection = moveDirection + Vector3.new(0, 1, 0)
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) and not UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+                moveDirection = moveDirection - Vector3.new(0, 1, 0)
+            end
+            
+            bodyVelocity.Velocity = moveDirection * currentSpeed
+            bodyGyro.CFrame = camera.CFrame
+        end)
+    end)
+end
+
+local function stopFlight()
+    if not flying then return end
+    pcall(function()
+        local character = player.Character
+        if character and character:FindFirstChildOfClass("Humanoid") then
+            character:FindFirstChildOfClass("Humanoid").PlatformStand = false
+        end
+        if bodyVelocity then bodyVelocity:Destroy() end
+        if bodyGyro then bodyGyro:Destroy() end
+        RunService:UnbindFromRenderStep("FlightControl")
+        flying = false
+        if flightToggleButton then
+            flightToggleButton.Text = "✈️ Flight: OFF"
+            flightToggleButton.BackgroundColor3 = Theme.Button
+        end
+        createNotification("Flight disabled", "success")
+    end)
+end
+
+--// ENHANCED MODERATION FUNCTIONS
+local function cuffPlayer(targetPlayer)
+    if not autoEquipHandcuffs() then
+        return false
+    end
+    
+    local success = false
+    pcall(function()
+        local character = player.Character
+        if not character or not character:FindFirstChild("Handcuffs") then
+            createNotification("Failed to equip handcuffs", "error")
+            return
+        end
+        local cuffsEvent = character.Handcuffs:FindFirstChild("Manager") and character.Handcuffs.Manager:FindFirstChild("CuffsEvent")
+        if not cuffsEvent then
+            createNotification("CuffsEvent not found", "error")
+            return
+        end
+        if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            createNotification("Target player or character not found", "error")
+            return
+        end
+        cuffsEvent:FireServer("Detain", targetPlayer)
+        lastCuffSuccess = true
+        currentDetainedPlayer = targetPlayer
+        if flightToggleButton then
+            flightToggleButton.Visible = true
+        end
+        if releaseButton then
+            releaseButton.Visible = true
+        end
+        if friskButton then
+            friskButton.Visible = true
+        end
+        createNotification("Successfully cuffed " .. targetPlayer.Name, "success")
+        success = true
+    end)
+    return success
+end
+
+local function imprisonPlayer(targetPlayer, time, reason)
+    if not autoEquipHandcuffs() then
+        return false
+    end
+    
+    local success = false
+    pcall(function()
+        local character = player.Character
+        if not character or not character:FindFirstChild("Handcuffs") then
+            createNotification("Failed to equip handcuffs", "error")
+            return
+        end
+        local cuffsEvent = character.Handcuffs:FindFirstChild("Manager") and character.Handcuffs.Manager:FindFirstChild("CuffsEvent")
+        if not cuffsEvent then
+            createNotification("CuffsEvent not found", "error")
+            return
+        end
+        if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            createNotification("Target player or character not found", "error")
+            return
+        end
+        
+        -- Validate inputs
+        local timeNum = tonumber(time)
+        if not timeNum or timeNum < minPrisonTime then
+            createNotification("Invalid time: minimum " .. minPrisonTime .. " seconds", "error")
+            return
+        end
+        
+        if not reason or reason == "" or reason == "Enter arrest reason..." then
+            createNotification("Arrest reason is required", "error")
+            return
+        end
+        
+        -- Use the imprisonment remote
+        cuffsEvent:FireServer("Imprison", targetPlayer, tostring(timeNum), reason)
+        lastCuffSuccess = true
+        currentDetainedPlayer = targetPlayer
+        if flightToggleButton then
+            flightToggleButton.Visible = true
+        end
+        if releaseButton then
+            releaseButton.Visible = true
+        end
+        createNotification("Imprisoned " .. targetPlayer.Name .. " for " .. formatTime(timeNum) .. " - " .. reason, "prison")
+        success = true
+    end)
+    return success
+end
+
+local function releasePlayer()
+    if not autoEquipHandcuffs() then
+        return false
+    end
+    
+    pcall(function()
+        local character = player.Character
+        if not character or not character:FindFirstChild("Handcuffs") then
+            createNotification("Failed to equip handcuffs", "error")
+            return
+        end
+        local cuffsEvent = character.Handcuffs:FindFirstChild("Manager") and character.Handcuffs.Manager:FindFirstChild("CuffsEvent")
+        if not cuffsEvent then
+            createNotification("CuffsEvent not found", "error")
+            return
+        end
+        
+        cuffsEvent:FireServer("Release")
+        currentDetainedPlayer = nil
+        createNotification("Released detained player", "success")
+    end)
+end
+
+local function friskPlayer(targetPlayer)
+    if not autoEquipHandcuffs() then
+        return false
+    end
+    
+    pcall(function()
+        if not targetPlayer or not targetPlayer.Character then
+            createNotification("Target player not found for frisk", "error")
+            return
+        end
+        
+        local backpack = targetPlayer:FindFirstChild("Backpack")
+        if not backpack then
+            createNotification("Cannot access player's inventory", "error")
+            return
+        end
+        
+        local tools = {}
+        for _, tool in pairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") then
+                table.insert(tools, tool.Name)
+            end
+        end
+        
+        if #tools == 0 then
+            createNotification(targetPlayer.Name .. " has no tools in inventory", "success")
+        else
+            local toolList = table.concat(tools, ", ")
+            createNotification(targetPlayer.Name .. "'s tools: " .. toolList, "success", 5)
+        end
+    end)
+end
+
+--// TELEPORT FUNCTIONS
+local function teleportToPlayer(targetPlayer)
+    if not autoEquipHandcuffs() then
+        return
+    end
+    
+    pcall(function()
+        local character = player.Character
+        local targetCharacter = targetPlayer.Character
+        if not character or not character:FindFirstChild("HumanoidRootPart") then
+            createNotification("Your character not found", "error")
+            return
+        end
+        if not targetCharacter or not targetCharacter:FindFirstChild("HumanoidRootPart") then
+            createNotification("Target character not found", "error")
+            return
+        end
+        
+        -- Stop flight before teleporting
+        if flying then
+            stopFlight()
+        end
+        
+        character.HumanoidRootPart.CFrame = targetCharacter.HumanoidRootPart.CFrame * CFrame.new(0, 0, -3)
+        createNotification("Teleported to " .. targetPlayer.Name, "success")
+    end)
+end
+
+local function bringPlayerToYou(targetPlayer)
+    if not autoEquipHandcuffs() then
+        return
+    end
+    
+    pcall(function()
+        local character = player.Character
+        local targetCharacter = targetPlayer.Character
+        if not character or not character:FindFirstChild("HumanoidRootPart") then
+            createNotification("Your character not found", "error")
+            return
+        end
+        if not targetCharacter or not targetCharacter:FindFirstChild("HumanoidRootPart") then
+            createNotification("Target character not found", "error")
+            return
+        end
+        
+        -- First, cuff the player
+        if cuffPlayer(targetPlayer) then
+            task.wait(0.2) -- Wait a bit longer for server processing
+            targetCharacter.HumanoidRootPart.CFrame = character.HumanoidRootPart.CFrame * CFrame.new(0, 0, -2)
+            createNotification("Brought and cuffed " .. targetPlayer.Name, "success")
+        end
+    end)
+end
+
+--// CLICKABLE VALUE SYSTEM
+local function createClickableValue(parent, position, size, currentValue, updateFunction, minVal, maxVal, formatFunction, placeholder)
+    local container = Instance.new("Frame", parent)
+    container.Size = size
+    container.Position = position
+    container.BackgroundTransparency = 1
+    container.ZIndex = 10200
+    
+    local label = Instance.new("TextButton", container)
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.Position = UDim2.new(0, 0, 0, 0)
+    label.Text = formatFunction and formatFunction(currentValue) or tostring(currentValue)
+    label.TextColor3 = Theme.Settings
+    label.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    label.Font = Enum.Font.SourceSansBold
+    label.TextSize = 14
+    label.ZIndex = 10300
+    local labelCorner = Instance.new("UICorner", label)
+    labelCorner.CornerRadius = UDim.new(0, 4)
+    
+    local textBox = Instance.new("TextBox", container)
+    textBox.Size = UDim2.new(1, 0, 1, 0)
+    textBox.Position = UDim2.new(0, 0, 0, 0)
+    textBox.Text = tostring(currentValue)
+    textBox.TextColor3 = Theme.Text
+    textBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    textBox.Font = Enum.Font.SourceSans
+    textBox.TextSize = 14
+    textBox.ZIndex = 10400
+    textBox.Visible = false
+    textBox.PlaceholderText = placeholder or "Enter value..."
+    local textBoxCorner = Instance.new("UICorner", textBox)
+    textBoxCorner.CornerRadius = UDim.new(0, 4)
+    
+    label.MouseButton1Click:Connect(function()
+        label.Visible = false
+        textBox.Visible = true
+        textBox:CaptureFocus()
+    end)
+    
+    local function finishEditing()
+        local newValue = tonumber(textBox.Text)
+        if newValue and newValue >= minVal and newValue <= 99999 then -- Allow custom values beyond max
+            updateFunction(newValue)
+            label.Text = formatFunction and formatFunction(newValue) or tostring(newValue)
+        else
+            textBox.Text = tostring(currentValue)
+        end
+        label.Visible = true
+        textBox.Visible = false
+    end
+    
+    textBox.FocusLost:Connect(finishEditing)
+    textBox.FailedEvent.Connect(finishEditing)
+    
+    return container, label
+end
+
+--// SETTINGS GUI CREATION
+local function createSettingsGui()
+    settingsFrame = Instance.new("Frame", mainGui)
+    settingsFrame.Size = UDim2.new(0, 320, 0, 500)
+    settingsFrame.Position = UDim2.new(0.5, -160, 0.5, -250)
+    settingsFrame.BackgroundColor3 = Theme.WindowBG
+    settingsFrame.BackgroundTransparency = 0.05
+    settingsFrame.BorderSizePixel = 0
+    settingsFrame.ZIndex = 20000
+    settingsFrame.Visible = false
+    local settingsCorner = Instance.new("UICorner", settingsFrame)
+    settingsCorner.CornerRadius = UDim.new(0, 10)
+    
+    -- Settings shadow
+    local settingsShadow = Instance.new("Frame", settingsFrame)
+    settingsShadow.Size = UDim2.new(1, 4, 1, 4)
+    settingsShadow.Position = UDim2.new(0, -2, 0, -2)
+    settingsShadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    settingsShadow.BackgroundTransparency = 0.8
+    settingsShadow.ZIndex = 19999
+    local shadowCorner2 = Instance.new("UICorner", settingsShadow)
+    shadowCorner2.CornerRadius = UDim.new(0, 12)
+
+    -- Settings top bar
+    local settingsTopBar = Instance.new("Frame", settingsFrame)
+    settingsTopBar.Size = UDim2.new(1, 0, 0, 30)
+    settingsTopBar.BackgroundColor3 = Theme.Settings
+    settingsTopBar.BorderSizePixel = 0
+    settingsTopBar.ZIndex = 20100
+    local settingsTopCorner = Instance.new("UICorner", settingsTopBar)
+    settingsTopCorner.CornerRadius = UDim.new(0, 10)
+    
+    local settingsTitle = Instance.new("TextLabel", settingsTopBar)
+    settingsTitle.Size = UDim2.new(1, -40, 1, 0)
+    settingsTitle.Position = UDim2.new(0, 10, 0, 0)
+    settingsTitle.BackgroundTransparency = 1
+    settingsTitle.Text = "⚙️ Settings & Keybinds"
+    settingsTitle.Font = Enum.Font.SourceSansBold
+    settingsTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    settingsTitle.TextSize = 16
+    settingsTitle.TextXAlignment = Enum.TextXAlignment.Left
+    settingsTitle.ZIndex = 20200
+
+    local settingsCloseBtn = Instance.new("TextButton", settingsTopBar)
+    settingsCloseBtn.Size = UDim2.new(0, 25, 0, 25)
+    settingsCloseBtn.Position = UDim2.new(1, -30, 0, 2)
+    settingsCloseBtn.BackgroundColor3 = Theme.Error
+    settingsCloseBtn.Text = "X"
+    settingsCloseBtn.Font = Enum.Font.SourceSansBold
+    settingsCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    settingsCloseBtn.TextSize = 16
+    settingsCloseBtn.BorderSizePixel = 0
+    settingsCloseBtn.ZIndex = 20200
+    local settingsCloseCorner = Instance.new("UICorner", settingsCloseBtn)
+    settingsCloseCorner.CornerRadius = UDim.new(0, 6)
+
+    -- Settings content
+    local settingsContent = Instance.new("ScrollingFrame", settingsFrame)
+    settingsContent.Size = UDim2.new(1, -20, 1, -50)
+    settingsContent.Position = UDim2.new(0, 10, 0, 40)
+    settingsContent.BackgroundTransparency = 1
+    settingsContent.ScrollBarThickness = 6
+    settingsContent.ZIndex = 20100
+    settingsContent.CanvasSize = UDim2.new(0, 0, 0, 450)
+
+    -- Keybind settings creation
+    local yOffset = 10
+    local function createKeybindSetting(name, displayName, currentKey)
+        local container = Instance.new("Frame", settingsContent)
+        container.Size = UDim2.new(1, -10, 0, 50)
+        container.Position = UDim2.new(0, 0, 0, yOffset)
+        container.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        container.ZIndex = 20200
+        local containerCorner = Instance.new("UICorner", container)
+        containerCorner.CornerRadius = UDim.new(0, 6)
+
+        local label = Instance.new("TextLabel", container)
+        label.Size = UDim2.new(0.6, 0, 1, 0)
+        label.Position = UDim2.new(0, 10, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Text = displayName
+        label.Font = Enum.Font.SourceSansBold
+        label.TextColor3 = Theme.Text
+        label.TextSize = 14
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.ZIndex = 20300
+
+        local button = Instance.new("TextButton", container)
+        button.Size = UDim2.new(0.35, -10, 0, 30)
+        button.Position = UDim2.new(0.65, 0, 0, 10)
+        button.Text = getKeyCodeName(currentKey)
+        button.Font = Enum.Font.SourceSans
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.BackgroundColor3 = Theme.ButtonActive
+        button.TextSize = 12
+        button.ZIndex = 20300
+        local buttonCorner = Instance.new("UICorner", button)
+        buttonCorner.CornerRadius = UDim.new(0, 4)
+
+        button.MouseButton1Click:Connect(function()
+            button.Text = "Press key..."
+            button.BackgroundColor3 = Theme.Settings
+            waitingForKeybind = {name = name, button = button}
+        end)
+
+        yOffset = yOffset + 60
+        return button
+    end
+
+    -- Create keybind settings
+    createKeybindSetting("toggleGui", "Toggle GUI", KeybindSettings.toggleGui)
+    createKeybindSetting("quickCuff", "Quick Cuff", KeybindSettings.quickCuff)
+    createKeybindSetting("quickFlight", "Quick Flight Toggle", KeybindSettings.quickFlight)
+    createKeybindSetting("quickTeleport", "Quick Teleport", KeybindSettings.quickTeleport)
+    createKeybindSetting("quickImprison", "Quick Imprison", KeybindSettings.quickImprison)
+    createKeybindSetting("quickRelease", "Quick Release", KeybindSettings.quickRelease)
+
+    -- Instructions
+    local instructions = Instance.new("TextLabel", settingsContent)
+    instructions.Size = UDim2.new(1, -10, 0, 80)
+    instructions.Position = UDim2.new(0, 0, 0, yOffset + 10)
+    instructions.BackgroundColor3 = Color3.fromRGB(250, 250, 250)
+    instructions.Text = "💡 Tips:\n• Username search supports both @username and display names\n• Type to see autocomplete suggestions\n• Click Speed/Time values to enter custom amounts\n• Quick actions use the last entered username"
+    instructions.Font = Enum.Font.SourceSans
+    instructions.TextColor3 = Theme.Text
+    instructions.TextSize = 12
+    instructions.TextWrapped = true
+    instructions.TextYAlignment = Enum.TextYAlignment.Top
+    instructions.ZIndex = 20200
+    local instructionsCorner = Instance.new("UICorner", instructions)
+    instructionsCorner.CornerRadius = UDim.new(0, 6)
+    local instructionsPadding = Instance.new("UIPadding", instructions)
+    instructionsPadding.PaddingTop = UDim.new(0, 8)
+    instructionsPadding.PaddingLeft = UDim.new(0, 8)
+    instructionsPadding.PaddingRight = UDim.new(0, 8)
+
+    settingsCloseBtn.MouseButton1Click:Connect(function()
+        settingsFrame.Visible = false
+    end)
+end
+
+--// REASON DROPDOWN CREATION
+local function createReasonDropdown(parent, position)
+    local dropdown = Instance.new("Frame", parent)
+    dropdown.Size = UDim2.new(1, 0, 0, 30)
+    dropdown.Position = position
+    dropdown.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    dropdown.ZIndex = 10200
+    local dropdownCorner = Instance.new("UICorner", dropdown)
+    dropdownCorner.CornerRadius = UDim.new(0, 6)
+    
+    local currentReason = Instance.new("TextButton", dropdown)
+    currentReason.Size = UDim2.new(1, -25, 1, 0)
+    currentReason.Position = UDim2.new(0, 0, 0, 0)
+    currentReason.Text = "Select arrest reason..."
+    currentReason.TextColor3 = Theme.Placeholder
+    currentReason.BackgroundTransparency = 1
+    currentReason.Font = Enum.Font.SourceSans
+    currentReason.TextSize = 14
+    currentReason.TextXAlignment = Enum.TextXAlignment.Left
+    currentReason.ZIndex = 10300
+    local reasonPadding = Instance.new("UIPadding", currentReason)
+    reasonPadding.PaddingLeft = UDim.new(0, 8)
+    
+    local arrow = Instance.new("TextLabel", dropdown)
+    arrow.Size = UDim2.new(0, 25, 1, 0)
+    arrow.Position = UDim2.new(1, -25, 0, 0)
+    arrow.Text = "▼"
+    arrow.TextColor3 = Theme.Text
+    arrow.BackgroundTransparency = 1
+    arrow.Font = Enum.Font.SourceSans
+    arrow.TextSize = 12
+    arrow.ZIndex = 10300
+    
+    local optionsFrame = Instance.new("ScrollingFrame", dropdown)
+    optionsFrame.Size = UDim2.new(1, 0, 0, 150)
+    optionsFrame.Position = UDim2.new(0, 0, 1, 2)
+    optionsFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    optionsFrame.BorderSizePixel = 1
+    optionsFrame.BorderColor3 = Color3.fromRGB(200, 200, 200)
+    optionsFrame.Visible = false
+    optionsFrame.ZIndex = 15000
+    optionsFrame.ScrollBarThickness = 4
+    optionsFrame.CanvasSize = UDim2.new(0, 0, 0, #commonReasons * 25)
+    local optionsCorner = Instance.new("UICorner", optionsFrame)
+    optionsCorner.CornerRadius = UDim.new(0, 6)
+    
+    for i, reason in ipairs(commonReasons) do
+        local optionButton = Instance.new("TextButton", optionsFrame)
+        optionButton.Size = UDim2.new(1, 0, 0, 25)
+        optionButton.Position = UDim2.new(0, 0, 0, (i-1) * 25)
+        optionButton.Text = reason
+        optionButton.TextColor3 = Theme.Text
+        optionButton.BackgroundColor3 = i % 2 == 0 and Color3.fromRGB(250, 250, 250) or Color3.fromRGB(255, 255, 255)
+        optionButton.Font = Enum.Font.SourceSans
+        optionButton.TextSize = 12
+        optionButton.TextXAlignment = Enum.TextXAlignment.Left
+        optionButton.ZIndex = 15100
+        local optionPadding = Instance.new("UIPadding", optionButton)
+        optionPadding.PaddingLeft = UDim.new(0, 8)
+        
+        optionButton.MouseButton1Click:Connect(function()
+            if reason == "Custom..." then
+                -- Create custom reason input
+                if not reasonBox then
+                    reasonBox = Instance.new("TextBox", dropdown.Parent)
+                    reasonBox.Size = UDim2.new(1, 0, 0, 30)
+                    reasonBox.Position = UDim2.new(0, 0, 0, 105)
+                    reasonBox.PlaceholderText = "Enter custom arrest reason..."
+                    reasonBox.Text = ""
+                    reasonBox.TextColor3 = Theme.Text
+                    reasonBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                    reasonBox.Font = Enum.Font.SourceSans
+                    reasonBox.TextSize = 14
+                    reasonBox.ZIndex = 10200
+                    local customCorner = Instance.new("UICorner", reasonBox)
+                    customCorner.CornerRadius = UDim.new(0, 6)
+                end
+                reasonBox.Visible = true
+                currentReason.Text = "Custom reason"
+                currentReason.TextColor3 = Theme.Text
+            else
+                currentReason.Text = reason
+                currentReason.TextColor3 = Theme.Text
+                if reasonBox then
+                    reasonBox.Visible = false
+                end
+            end
+            optionsFrame.Visible = false
+            arrow.Text = "▼"
+        end)
+        
+        optionButton.MouseEnter:Connect(function()
+            optionButton.BackgroundColor3 = Theme.ButtonActive
+        end)
+        
+        optionButton.MouseLeave:Connect(function()
+            optionButton.BackgroundColor3 = i % 2 == 0 and Color3.fromRGB(250, 250, 250) or Color3.fromRGB(255, 255, 255)
+        end)
+    end
+    
+    currentReason.MouseButton1Click:Connect(function()
+        optionsFrame.Visible = not optionsFrame.Visible
+        arrow.Text = optionsFrame.Visible and "▲" or "▼"
+    end)
+    
+    return dropdown, currentReason
+end
+
+--// MAIN GUI CREATION
+local function createGui()
+    mainGui = Instance.new("ScreenGui")
+    mainGui.Name = "CuffFlyTeleportGui"
+    mainGui.ResetOnSpawn = false
+    mainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    mainGui.IgnoreGuiInset = true
+
+    -- Retry parenting to PlayerGui
+    local attempts = 0
+    while not player:FindFirstChild("PlayerGui") and attempts < 10 do
+        attempts = attempts + 1
+        wait(0.5)
+    end
+    mainGui.Parent = player:FindFirstChild("PlayerGui") or game:GetService("StarterGui")
+
+    -- Main frame (made taller for new features)
+    mainFrame = Instance.new("Frame", mainGui)
+    mainFrame.Size = UDim2.new(0, 240, 0, 400)
+    mainFrame.Position = UDim2.new(0.5, -120, 0.5, -200)
+    mainFrame.BackgroundColor3 = Theme.WindowBG
+    mainFrame.BackgroundTransparency = 0.05
+    mainFrame.BorderSizePixel = 0
+    mainFrame.ZIndex = 10000
+    local UICorner = Instance.new("UICorner", mainFrame)
+    UICorner.CornerRadius = UDim.new(0, 10)
+    
+    -- Add shadow effect
+    local shadow = Instance.new("Frame", mainFrame)
+    shadow.Size = UDim2.new(1, 4, 1, 4)
+    shadow.Position = UDim2.new(0, -2, 0, -2)
+    shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    shadow.BackgroundTransparency = 0.8
+    shadow.ZIndex = 9999
+    local shadowCorner = Instance.new("UICorner", shadow)
+    shadowCorner.CornerRadius = UDim.new(0, 12)
+
+    -- Top bar
+    local TopBar = Instance.new("Frame", mainFrame)
+    TopBar.Size = UDim2.new(1, 0, 0, 30)
+    TopBar.BackgroundColor3 = Theme.Accent
+    TopBar.BorderSizePixel = 0
+    TopBar.ZIndex = 10100
+    local topCorner = Instance.new("UICorner", TopBar)
+    topCorner.CornerRadius = UDim.new(0, 10)
+    
+    local TitleLabel = Instance.new("TextLabel", TopBar)
+    TitleLabel.Size = UDim2.new(1, -110, 1, 0)
+    TitleLabel.Position = UDim2.new(0, 10, 0, 0)
+    TitleLabel.BackgroundTransparency = 1
+    TitleLabel.Text = "🚁 Enhanced Mod Tools"
+    TitleLabel.Font = Enum.Font.SourceSansBold
+    TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TitleLabel.TextSize = 14
+    TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLabel.ZIndex = 10200
+
+    -- Settings button
+    local SettingsBtn = Instance.new("TextButton", TopBar)
+    SettingsBtn.Size = UDim2.new(0, 25, 0, 25)
+    SettingsBtn.Position = UDim2.new(1, -85, 0, 2)
+    SettingsBtn.BackgroundColor3 = Theme.Settings
+    SettingsBtn.Text = "⚙️"
+    SettingsBtn.Font = Enum.Font.SourceSans
+    SettingsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    SettingsBtn.TextSize = 14
+    SettingsBtn.BorderSizePixel = 0
+    SettingsBtn.ZIndex = 10200
+    local settingsBtnCorner = Instance.new("UICorner", SettingsBtn)
+    settingsBtnCorner.CornerRadius = UDim.new(0, 6)
+
+    -- Minimize button
+    local MinimizeBtn = Instance.new("TextButton", TopBar)
+    MinimizeBtn.Size = UDim2.new(0, 25, 0, 25)
+    MinimizeBtn.Position = UDim2.new(1, -55, 0, 2)
+    MinimizeBtn.BackgroundColor3 = Theme.Warning
+    MinimizeBtn.Text = "_"
+    MinimizeBtn.Font = Enum.Font.SourceSansBold
+    MinimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    MinimizeBtn.TextSize = 16
+    MinimizeBtn.BorderSizePixel = 0
+    MinimizeBtn.ZIndex = 10200
+    local minimizeBtnCorner = Instance.new("UICorner", MinimizeBtn)
+    minimizeBtnCorner.CornerRadius = UDim.new(0, 6)
+
+    -- Close button (actually closes)
+    local CloseBtn = Instance.new("TextButton", TopBar)
+    CloseBtn.Size = UDim2.new(0, 25, 0, 25)
+    CloseBtn.Position = UDim2.new(1, -30, 0, 2)
+    CloseBtn.BackgroundColor3 = Theme.Error
+    CloseBtn.Text = "X"
+    CloseBtn.Font = Enum.Font.SourceSansBold
+    CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CloseBtn.TextSize = 16
+    CloseBtn.BorderSizePixel = 0
+    CloseBtn.ZIndex = 10200
+    local closeBtnCorner = Instance.new("UICorner", CloseBtn)
+    closeBtnCorner.CornerRadius = UDim.new(0, 6)
+
+    -- Drag functionality
+    mainFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = mainFrame.Position
+        end
+    end)
+    mainFrame.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            mainFrame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    -- Control frame for when minimized
+    controlFrame = Instance.new("Frame", mainGui)
+    controlFrame.Size = UDim2.new(0, 120, 0, 30)
+    controlFrame.Position = UDim2.new(0.5, -60, 1, -40)
+    controlFrame.BackgroundColor3 = Theme.Accent
+    controlFrame.BackgroundTransparency = 0.1
+    controlFrame.Visible = false
+    controlFrame.ZIndex = 10500
+    local ctrlCorner = Instance.new("UICorner", controlFrame)
+    ctrlCorner.CornerRadius = UDim.new(0, 8)
+    
+    local reopenButton = Instance.new("TextButton", controlFrame)
+    reopenButton.Size = UDim2.new(1, -10, 1, -5)
+    reopenButton.Position = UDim2.new(0, 5, 0, 2)
+    reopenButton.Text = "🚁 Open Mod Tools"
+    reopenButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    reopenButton.BackgroundColor3 = Theme.ButtonActive
+    reopenButton.Font = Enum.Font.SourceSansBold
+    reopenButton.TextSize = 11
+    reopenButton.ZIndex = 10600
+    local reopenCorner = Instance.new("UICorner", reopenButton)
+    reopenCorner.CornerRadius = UDim.new(0, 6)
+
+    -- Main panel
+    local mainPanel = Instance.new("Frame", mainFrame)
+    mainPanel.BackgroundTransparency = 1
+    mainPanel.Size = UDim2.new(1, -20, 1, -40)
+    mainPanel.Position = UDim2.new(0, 10, 0, 35)
+    mainPanel.ZIndex = 10100
+
+    -- Username input with autocomplete
+    usernameBox = Instance.new("TextBox", mainPanel)
+    usernameBox.Size = UDim2.new(1, 0, 0, 30)
+    usernameBox.Position = UDim2.new(0, 0, 0, 0)
+    usernameBox.PlaceholderText = "Enter player username or @displayname..."
+    usernameBox.Text = ""
+    usernameBox.TextColor3 = Theme.Text
+    usernameBox.PlaceholderColor3 = Theme.Placeholder
+    usernameBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    usernameBox.Font = Enum.Font.SourceSans
+    usernameBox.TextSize = 14
+    usernameBox.ZIndex = 10200
+    usernameBox.ClearTextOnFocus = false
+    local usernameCorner = Instance.new("UICorner", usernameBox)
+    usernameCorner.CornerRadius = UDim.new(0, 6)
+
+    -- Autocomplete suggestion frame
+    suggestionFrame = Instance.new("Frame", mainPanel)
+    suggestionFrame.Size = UDim2.new(1, 0, 0, 125)
+    suggestionFrame.Position = UDim2.new(0, 0, 0, 30)
+    suggestionFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    suggestionFrame.BorderSizePixel = 1
+    suggestionFrame.BorderColor3 = Color3.fromRGB(200, 200, 200)
+    suggestionFrame.Visible = false
+    suggestionFrame.ZIndex = 14000
+    local suggestionCorner = Instance.new("UICorner", suggestionFrame)
+    suggestionCorner.CornerRadius = UDim.new(0, 6)
+
+    -- Username box events
+    usernameBox:GetPropertyChangedSignal("Text"):Connect(function()
+        currentUserInput = usernameBox.Text
+        if string.len(currentUserInput) > 0 then
+            updateAutocompleteSuggestions()
+        else
+            hideAutocompleteSuggestions()
+        end
+    end)
+
+    usernameBox.FocusLost:Connect(function()
+        -- Delay hiding suggestions to allow clicking on them
+        task.wait(0.1)
+        hideAutocompleteSuggestions()
+    end)
+
+    usernameBox.Focused:Connect(function()
+        if string.len(currentUserInput) > 0 then
+            updateAutocompleteSuggestions()
+        end
+    end)
+
+    -- Button creation helper
+    local function createButton(parent, size, position, text, color, callback)
+        local button = Instance.new("TextButton", parent)
+        button.Size = size
+        button.Position = position
+        button.Text = text
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.BackgroundColor3 = color
+        button.Font = Enum.Font.SourceSansBold
+        button.TextSize = 12
+        button.ZIndex = 10200
+        local corner = Instance.new("UICorner", button)
+        corner.CornerRadius = UDim.new(0, 6)
+        button.MouseButton1Click:Connect(callback)
+        return button
+    end
+
+    -- Action buttons (adjusted positions for new features)
+    teleportToButton = createButton(mainPanel, UDim2.new(0.48, 0, 0, 25), UDim2.new(0, 0, 0, 40), "📍 Teleport", Theme.Accent, function()
+        local targetPlayer = findPlayerByName(usernameBox.Text)
+        if targetPlayer then
+            teleportToPlayer(targetPlayer)
+        else
+            createNotification("Player '" .. usernameBox.Text .. "' not found", "error")
+        end
+    end)
+
+    bringToButton = createButton(mainPanel, UDim2.new(0.48, 0, 0, 25), UDim2.new(0.52, 0, 0, 40), "🎯 Bring", Theme.Accent, function()
+        local targetPlayer = findPlayerByName(usernameBox.Text)
+        if targetPlayer then
+            bringPlayerToYou(targetPlayer)
+        else
+            createNotification("Player '" .. usernameBox.Text .. "' not found", "error")
+        end
+    end)
+
+    cuffButton = createButton(mainPanel, UDim2.new(0.48, 0, 0, 25), UDim2.new(0, 0, 0, 70), "🔒 Cuff", Theme.ButtonActive, function()
+        local targetPlayer = findPlayerByName(usernameBox.Text)
+        if targetPlayer then
+            cuffPlayer(targetPlayer)
+        else
+            createNotification("Player '" .. usernameBox.Text .. "' not found", "error")
+        end
+    end)
+
+    friskButton = createButton(mainPanel, UDim2.new(0.48, 0, 0, 25), UDim2.new(0.52, 0, 0, 70), "🔍 Frisk", Theme.Settings, function()
+        local targetPlayer = findPlayerByName(usernameBox.Text)
+        if targetPlayer then
+            friskPlayer(targetPlayer)
+        else
+            createNotification("Player '" .. usernameBox.Text .. "' not found", "error")
+        end
+    end)
+
+    -- Prison time controls with clickable value
+    local prisonTimeContainer = Instance.new("Frame", mainPanel)
+    prisonTimeContainer.Size = UDim2.new(1, 0, 0, 20)
+    prisonTimeContainer.Position = UDim2.new(0, 0, 0, 100)
+    prisonTimeContainer.BackgroundTransparency = 1
+    prisonTimeContainer.ZIndex = 10200
+
+    local prisonTimeLabel = Instance.new("TextLabel", prisonTimeContainer)
+    prisonTimeLabel.Size = UDim2.new(0.6, 0, 1, 0)
+    prisonTimeLabel.Position = UDim2.new(0, 0, 0, 0)
+    prisonTimeLabel.Text = "Prison Time:"
+    prisonTimeLabel.TextColor3 = Theme.Text
+    prisonTimeLabel.BackgroundTransparency = 1
+    prisonTimeLabel.Font = Enum.Font.SourceSansBold
+    prisonTimeLabel.TextSize = 14
+    prisonTimeLabel.TextXAlignment = Enum.TextXAlignment.Left
+    prisonTimeLabel.ZIndex = 10200
+
+    local prisonValueContainer, prisonLabel = createClickableValue(
+        prisonTimeContainer, 
+        UDim2.new(0.6, 0, 0, 0), 
+        UDim2.new(0.4, 0, 1, 0), 
+        prisonTime, 
+        updatePrisonTime, 
+        minPrisonTime, 
+        maxPrisonTime, 
+        formatTime,
+        "Seconds (120+)"
+    )
+
+    -- Prison time slider background
+    local prisonSliderBG = Instance.new("Frame", mainPanel)
+    prisonSliderBG.Size = UDim2.new(1, 0, 0, 20)
+    prisonSliderBG.Position = UDim2.new(0, 0, 0, 125)
+    prisonSliderBG.BackgroundColor3 = Color3.fromRGB(220, 220, 220)
+    prisonSliderBG.ZIndex = 10200
+    local prisonSliderBGCorner = Instance.new("UICorner", prisonSliderBG)
+    prisonSliderBGCorner.CornerRadius = UDim.new(0, 10)
+
+    -- Prison time slider
+    prisonSlider = Instance.new("TextButton", prisonSliderBG)
+    prisonSlider.Size = UDim2.new(0, 20, 1, 0)
+    prisonSlider.Position = UDim2.new((prisonTime - minPrisonTime) / (maxPrisonTime - minPrisonTime), -10, 0, 0)
+    prisonSlider.Text = ""
+    prisonSlider.BackgroundColor3 = Theme.Prison
+    prisonSlider.ZIndex = 10300
+    local prisonSliderCorner = Instance.new("UICorner", prisonSlider)
+    prisonSliderCorner.CornerRadius = UDim.new(0, 10)
+
+    -- Prison slider functionality
+    local draggingPrisonSlider = false
+    prisonSlider.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingPrisonSlider = true
+        end
+    end)
+    prisonSlider.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingPrisonSlider = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if draggingPrisonSlider and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local mousePos = input.Position
+            local sliderPos = prisonSliderBG.AbsolutePosition
+            local relativeX = mousePos.X - sliderPos.X
+            local percentage = math.clamp(relativeX / prisonSliderBG.AbsoluteSize.X, 0, 1)
+            prisonSlider.Position = UDim2.new(percentage, -10, 0, 0)
+            local newTime = minPrisonTime + (maxPrisonTime - minPrisonTime) * percentage
+            updatePrisonTime(math.floor(newTime))
+        end
+    end)
+
+    -- Reason dropdown
+    local reasonDropdown, currentReasonButton = createReasonDropdown(mainPanel, UDim2.new(0, 0, 0, 150))
+
+    -- Imprison button
+    imprisonButton = createButton(mainPanel, UDim2.new(1, 0, 0, 25), UDim2.new(0, 0, 0, 185), "🏢 Imprison Player", Theme.Prison, function()
+        local targetPlayer = findPlayerByName(usernameBox.Text)
+        if targetPlayer then
+            local reason = currentReasonButton.Text
+            if reason == "Select arrest reason..." then
+                createNotification("Please select an arrest reason", "error")
+                return
+            end
+            if reason == "Custom reason" and reasonBox then
+                reason = reasonBox.Text
+                if reason == "" or reason == "Enter custom arrest reason..." then
+                    createNotification("Please enter a custom reason", "error")
+                    return
+                end
+            end
+            imprisonPlayer(targetPlayer, prisonTime, reason)
+        else
+            createNotification("Player '" .. usernameBox.Text .. "' not found", "error")
+        end
+    end)
+
+    -- Release button
+    releaseButton = createButton(mainPanel, UDim2.new(0.48, 0, 0, 25), UDim2.new(0, 0, 0, 215), "🔓 Release", Theme.Success, function()
+        releasePlayer()
+    end)
+    releaseButton.Visible = false
+
+    -- Flight speed controls with clickable value
+    local flightSpeedContainer = Instance.new("Frame", mainPanel)
+    flightSpeedContainer.Size = UDim2.new(1, 0, 0, 20)
+    flightSpeedContainer.Position = UDim2.new(0, 0, 0, 245)
+    flightSpeedContainer.BackgroundTransparency = 1
+    flightSpeedContainer.ZIndex = 10200
+
+    local flightSpeedLabel = Instance.new("TextLabel", flightSpeedContainer)
+    flightSpeedLabel.Size = UDim2.new(0.6, 0, 1, 0)
+    flightSpeedLabel.Position = UDim2.new(0, 0, 0, 0)
+    flightSpeedLabel.Text = "Flight Speed:"
+    flightSpeedLabel.TextColor3 = Theme.Text
+    flightSpeedLabel.BackgroundTransparency = 1
+    flightSpeedLabel.Font = Enum.Font.SourceSansBold
+    flightSpeedLabel.TextSize = 14
+    flightSpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+    flightSpeedLabel.ZIndex = 10200
+
+    local speedValueContainer, speedLabel = createClickableValue(
+        flightSpeedContainer, 
+        UDim2.new(0.6, 0, 0, 0), 
+        UDim2.new(0.4, 0, 1, 0), 
+        flightSpeed, 
+        updateFlightSpeed, 
+        minFlightSpeed, 
+        maxFlightSpeed, 
+        function(speed) return "Speed: " .. tostring(speed) end,
+        "Speed (10+)"
+    )
+
+    -- Flight speed slider background
+    local sliderBG = Instance.new("Frame", mainPanel)
+    sliderBG.Size = UDim2.new(1, 0, 0, 20)
+    sliderBG.Position = UDim2.new(0, 0, 0, 270)
+    sliderBG.BackgroundColor3 = Color3.fromRGB(220, 220, 220)
+    sliderBG.ZIndex = 10200
+    local sliderBGCorner = Instance.new("UICorner", sliderBG)
+    sliderBGCorner.CornerRadius = UDim.new(0, 10)
+
+    -- Flight speed slider
+    speedSlider = Instance.new("TextButton", sliderBG)
+    speedSlider.Size = UDim2.new(0, 20, 1, 0)
+    speedSlider.Position = UDim2.new((flightSpeed - minFlightSpeed) / (maxFlightSpeed - minFlightSpeed), -10, 0, 0)
+    speedSlider.Text = ""
+    speedSlider.BackgroundColor3 = Theme.ButtonActive
+    speedSlider.ZIndex = 10300
+    local sliderCorner = Instance.new("UICorner", speedSlider)
+    sliderCorner.CornerRadius = UDim.new(0, 10)
+
+    -- Flight slider functionality
+    local draggingSlider = false
+    speedSlider.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingSlider = true
+        end
+    end)
+    speedSlider.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            draggingSlider = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if draggingSlider and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local mousePos = input.Position
+            local sliderPos = sliderBG.AbsolutePosition
+            local relativeX = mousePos.X - sliderPos.X
+            local percentage = math.clamp(relativeX / sliderBG.AbsoluteSize.X, 0, 1)
+            speedSlider.Position = UDim2.new(percentage, -10, 0, 0)
+            local newSpeed = minFlightSpeed + (maxFlightSpeed - minFlightSpeed) * percentage
+            updateFlightSpeed(math.floor(newSpeed))
+        end
+    end)
+
+    -- Flight toggle button
+    flightToggleButton = createButton(mainPanel, UDim2.new(1, 0, 0, 25), UDim2.new(0, 0, 0, 295), "✈️ Flight: OFF", Theme.Button, function()
+        if not lastCuffSuccess then
+            createNotification("Cuff a player first to enable flight", "error")
+            return
+        end
+        if flying then
+            stopFlight()
+        else
+            startFlight()
+        end
+    end)
+    flightToggleButton.Visible = false
+
+    -- Button event handlers
+    SettingsBtn.MouseButton1Click:Connect(function()
+        settingsFrame.Visible = not settingsFrame.Visible
+    end)
+
+    MinimizeBtn.MouseButton1Click:Connect(function()
+        mainFrame.Visible = false
+        controlFrame.Visible = true
+        isMinimized = true
+    end)
+
+    CloseBtn.MouseButton1Click:Connect(function()
+        -- Completely destroy the GUI
+        if flying then
+            stopFlight()
+        end
+        if mainGui then
+            mainGui:Destroy()
+        end
+        createNotification("🚁 Mod Tools closed - reload script to reopen", "warning", 5)
+    end)
+
+    reopenButton.MouseButton1Click:Connect(function()
+        mainFrame.Visible = true
+        controlFrame.Visible = false
+        isMinimized = false
+    end)
+end
+
+--// KEYBIND HANDLING
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    
+    -- Handle keybind assignment
+    if waitingForKeybind then
+        local keyName = getKeyCodeName(input.KeyCode)
+        waitingForKeybind.button.Text = keyName
+        waitingForKeybind.button.BackgroundColor3 = Theme.ButtonActive
+        KeybindSettings[waitingForKeybind.name] = input.KeyCode
+        waitingForKeybind = nil
+        createNotification("Keybind updated: " .. keyName, "success", 2)
+        return
+    end
+
+    -- Handle regular keybinds
+    if input.KeyCode == KeybindSettings.toggleGui then
+        if mainGui and mainFrame then
+            if isMinimized then
+                mainFrame.Visible = true
+                controlFrame.Visible = false
+                isMinimized = false
+            else
+                mainFrame.Visible = not mainFrame.Visible
+                if not mainFrame.Visible then
+                    controlFrame.Visible = true
+                    isMinimized = true
+                    stopFlight()
+                else
+                    controlFrame.Visible = false
+                    isMinimized = false
+                end
+            end
+        end
+    elseif input.KeyCode == KeybindSettings.quickCuff then
+        if currentUserInput and currentUserInput ~= "" then
+            local targetPlayer = findPlayerByName(currentUserInput)
+            if targetPlayer then
+                cuffPlayer(targetPlayer)
+            else
+                createNotification("Quick cuff failed: Player not found", "error")
+            end
+        else
+            createNotification("Enter a username first", "error")
+        end
+    elseif input.KeyCode == KeybindSettings.quickFlight then
+        if lastCuffSuccess then
+            if flying then
+                stopFlight()
+            else
+                startFlight()
+            end
+        else
+            createNotification("Cuff a player first to enable flight", "error")
+        end
+    elseif input.KeyCode == KeybindSettings.quickTeleport then
+        if currentUserInput and currentUserInput ~= "" then
+            local targetPlayer = findPlayerByName(currentUserInput)
+            if targetPlayer then
+                teleportToPlayer(targetPlayer)
+            else
+                createNotification("Quick teleport failed: Player not found", "error")
+            end
+        else
+            createNotification("Enter a username first", "error")
+        end
+    elseif input.KeyCode == KeybindSettings.quickImprison then
+        if currentUserInput and currentUserInput ~= "" then
+            local targetPlayer = findPlayerByName(currentUserInput)
+            if targetPlayer then
+                -- Use default values for quick imprison
+                imprisonPlayer(targetPlayer, 600, "Quick Arrest - Rule Violation")
+            else
+                createNotification("Quick imprison failed: Player not found", "error")
+            end
+        else
+            createNotification("Enter a username first", "error")
+        end
+    elseif input.KeyCode == KeybindSettings.quickRelease then
+        releasePlayer()
+    end
+end)
+
+--// MONITOR CHARACTER SPAWNING
+player.CharacterAdded:Connect(function()
+    task.wait(1) -- Wait for character to fully load
+    monitorHandcuffsEquip()
+    findHandcuffs() -- Update handcuffs reference
+end)
+
+--// INITIALIZE
+task.wait(2) -- Wait for everything to load
+createGui()
+createSettingsGui()
+if player.Character then
+    monitorHandcuffsEquip()
+end
+findHandcuffs()
+
+-- Initial notifications with instructions
+createNotification("🚁 Enhanced Mod Tools Loaded!", "success", 5)
+task.wait(1)
+createNotification("Press " .. getKeyCodeName(KeybindSettings.toggleGui) .. " to minimize (edit keybinds in ⚙️ settings)", "success", 6)
+task.wait(3)
+createNotification("💡 Click Speed/Time values to enter custom amounts beyond sliders!", "success", 5)
